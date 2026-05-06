@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aivoy
+      POSTGRES_PASSWORD: aivoy
+      POSTGRES_DB: aivoy
+    ports:
+      - '5433:5432'
+    volumes:
+      - aivoy_pg:/var/lib/postgresql/data
+
+volumes:
+  aivoy_pg:
