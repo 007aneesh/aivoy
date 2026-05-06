@@ -1,6 +1,7 @@
 import { auth, currentUser } from '@clerk/nextjs/server';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
+import { generateWebhookSecret } from '@/lib/crypto';
 
 /**
  * Resolves the current tenant for the signed-in user, creating one on first
@@ -31,12 +32,14 @@ export async function getOrCreateTenant() {
   // Atomic upsert: layout + page can both run getOrCreateTenant() concurrently
   // on the first visit. ON CONFLICT DO NOTHING + RETURNING means a losing
   // racer gets an empty array back, then re-selects the winner's row.
+  const webhookSigningSecret = await generateWebhookSecret();
   const inserted = await db
     .insert(schema.tenants)
     .values({
       clerkOrgId,
       clerkUserId: orgId ? null : userId,
       name,
+      webhookSigningSecret,
     })
     .onConflictDoNothing({ target: schema.tenants.clerkOrgId })
     .returning();
