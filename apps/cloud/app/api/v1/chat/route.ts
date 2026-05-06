@@ -1,0 +1,182 @@
+import { NextResponse, type NextRequest } from 'next/server';
+import { z } from 'zod';
+import { eq, sql } from 'drizzle-orm';
+import { db, schema } from '@/db';
+import { ChatAuthError, loadChatContext } from '@/lib/chat/tokenContext';
+import { runTurn } from '@/lib/chat/engine';
+import { checkTokenRateLimit } from '@/lib/chat/rateLimit';
+import type { ServerChunk, WireMessage } from '@/lib/chat/types';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const Body = z.object({
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string(),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: corsHeaders(req.headers.get('origin')),
+  });
+}
+
+export async function POST(req: NextRequest) {
+  const origin = req.headers.get('origin');
+
+  let parsed: { messages: WireMessage[] };
+  try {
+    const json = await req.json();
+    parsed = Body.parse(json);
+  } catch (e) {
+    return jsonError(400, e instanceof Error ? e.message : 'Invalid request body', origin);
+  }
+
+  let ctx;
+  try {
+    ctx = await loadChatContext(req.headers.get('authorization'), origin);
+  } catch (e) {
+    if (e instanceof ChatAuthError) {
+      return jsonError(e.status, e.message, origin);
+    }
+    return jsonError(500, e instanceof Error ? e.message : 'Internal error', origin);
+  }
+
+  // Rate limit: per-token monthly message cap. Reject before we hit the LLM.
+  const rateLimit = await checkTokenRateLimit(
+    ctx.token.id,
+    ctx.token.monthlyMessageCap,
+  );
+  const rateLimitHeaders: Record<string, string> = {
+    'X-RateLimit-Limit': ctx.token.monthlyMessageCap?.toString() ?? 'unlimited',
+    'X-RateLimit-Remaining':
+      ctx.token.monthlyMessageCap == null
+        ? 'unlimited'
+        : Math.max(0, rateLimit.remaining).toString(),
+    'X-RateLimit-Reset': rateLimit.resetAt.toString(),
+  };
+  if (rateLimit.exceeded) {
+    return new NextResponse(
+      JSON.stringify({
+        error: `Monthly message cap of ${rateLimit.cap} reached. Resets ${new Date(
+          rateLimit.resetAt * 1000,
+        ).toISOString()}.`,
+      }),
+      {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders(origin),
+          ...rateLimitHeaders,
+          'Retry-After': Math.max(
+            1,
+            rateLimit.resetAt - Math.floor(Date.now() / 1000),
+          ).toString(),
+        },
+      },
+    );
+  }
+
+  // Echo only the validated origin in the streaming response so browsers will
+  // accept it. For server-to-server (no origin), we leave it unset.
+  const responseHeaders = new Headers({
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    'X-Accel-Buffering': 'no',
+    Connection: 'keep-alive',
+    ...corsHeaders(origin),
+    ...rateLimitHeaders,
+  });
+
+  const encoder = new TextEncoder();
+  const writeChunk = (controller: ReadableStreamDefaultController, chunk: ServerChunk) => {
+    controller.enqueue(encoder.encode(JSON.stringify(chunk) + '\n'));
+  };
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const generator = runTurn({
+        ctx,
+        messages: parsed.messages,
+        signal: req.signal,
+      });
+
+      let totals = { inputTokens: 0, outputTokens: 0, toolCallCount: 0 };
+      try {
+        while (true) {
+          const next = await generator.next();
+          if (next.done) {
+            totals = next.value;
+            break;
+          }
+          writeChunk(controller, next.value);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        writeChunk(controller, { type: 'error', error: msg });
+        writeChunk(controller, { type: 'done' });
+      } finally {
+        controller.close();
+      }
+
+      // Best-effort: log usage + bump last_used_at. Don't await on the stream
+      // path; failures here shouldn't impact the user-visible response.
+      void recordUsage(ctx, totals).catch((err) => {
+        console.error('usage logging failed', err);
+      });
+    },
+    cancel(reason) {
+      // Client disconnected mid-stream. The req.signal already aborts, which
+      // unwinds runTurn → provider stream → fetch.
+      void reason;
+    },
+  });
+
+  return new Response(stream, { headers: responseHeaders });
+}
+
+async function recordUsage(
+  ctx: Awaited<ReturnType<typeof loadChatContext>>,
+  totals: { inputTokens: number; outputTokens: number; toolCallCount: number },
+) {
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.usageEvents).values({
+      tenantId: ctx.tenant.id,
+      tokenId: ctx.token.id,
+      provider: ctx.credential.provider,
+      model: ctx.credential.model,
+      inputTokens: totals.inputTokens,
+      outputTokens: totals.outputTokens,
+      toolCallCount: totals.toolCallCount,
+    });
+    await tx
+      .update(schema.integrationTokens)
+      .set({ lastUsedAt: sql`now()` })
+      .where(eq(schema.integrationTokens.id, ctx.token.id));
+  });
+}
+
+function corsHeaders(origin: string | null): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': origin ?? '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+    Vary: 'Origin',
+  };
+}
+
+function jsonError(status: number, message: string, origin: string | null) {
+  return NextResponse.json(
+    { error: message },
+    { status, headers: corsHeaders(origin) },
+  );
+}
