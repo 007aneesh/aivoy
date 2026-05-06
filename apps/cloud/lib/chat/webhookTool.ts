@@ -12,19 +12,20 @@ export interface WebhookResult {
 
 /**
  * Calls a tool's webhook with the LLM-supplied args, signs the payload with
- * the tool's webhook secret, and returns a JSON-parsed body.
+ * the TENANT's signing secret (one secret across every tool), and returns a
+ * JSON-parsed body.
  *
  * Signing scheme (mirror Stripe):
  *   timestamp = unix seconds
  *   signature = HMAC-SHA256(secret, "{timestamp}.{rawBody}")
  *   header    = "t={timestamp},v1={signature}"
  *
- * Tenants verify by recomputing on their side.
+ * Tenants verify by recomputing on their side using AIVOY_WEBHOOK_SECRET.
  */
 export async function invokeWebhook(
   tool: ServerTool,
   args: Record<string, unknown>,
-  ctx: { tenantId: string; tokenId: string },
+  ctx: { tenantId: string; tokenId: string; signingSecret: string },
   signal: AbortSignal,
 ): Promise<WebhookResult> {
   const payload = JSON.stringify({
@@ -35,7 +36,7 @@ export async function invokeWebhook(
   });
 
   const ts = Math.floor(Date.now() / 1000);
-  const signature = createHmac('sha256', tool.webhookSecret)
+  const signature = createHmac('sha256', ctx.signingSecret)
     .update(`${ts}.${payload}`)
     .digest('hex');
 

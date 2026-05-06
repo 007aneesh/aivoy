@@ -11,7 +11,7 @@
 import 'dotenv/config';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db';
-import { sealSecret, generatePublicToken, generateWebhookSecret } from '../lib/crypto';
+import { sealSecret, generatePublicToken } from '../lib/crypto';
 
 async function main() {
   const apiKey = process.argv[2];
@@ -66,8 +66,7 @@ async function main() {
       set: { providerCredentialId: credential!.id },
     });
 
-  // Tool — searchListings webhook.
-  const webhookSecret = await generateWebhookSecret();
+  // Tool — searchListings webhook. (Tenant signing secret already exists.)
   const [tool] = await db
     .insert(schema.tools)
     .values({
@@ -75,7 +74,6 @@ async function main() {
       name: 'searchListings',
       description: 'Search travel stays by city and number of guests',
       webhookUrl,
-      webhookSecret,
       inputSchema: {
         type: 'object',
         properties: {
@@ -88,7 +86,7 @@ async function main() {
     })
     .onConflictDoUpdate({
       target: [schema.tools.tenantId, schema.tools.name],
-      set: { webhookUrl, webhookSecret },
+      set: { webhookUrl },
     })
     .returning();
 
@@ -110,7 +108,7 @@ async function main() {
   console.log('  baseUrl         :', baseUrl ?? '(provider default)');
   console.log('  toolId          :', tool!.id);
   console.log('  webhook         :', webhookUrl);
-  console.log('  webhookSecret   :', webhookSecret);
+  console.log('  signingSecret   :', tenant.webhookSigningSecret, '(set as AIVOY_WEBHOOK_SECRET)');
   console.log('  allowedOrigin   :', allowedOrigin);
   console.log('');
   console.log('  PUBLIC TOKEN    :', publicToken);

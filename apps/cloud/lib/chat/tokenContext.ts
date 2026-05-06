@@ -104,7 +104,6 @@ export async function loadChatContext(
     description: t.description,
     parameters: t.inputSchema,
     webhookUrl: t.webhookUrl,
-    webhookSecret: t.webhookSecret,
     renderAs: t.renderAs,
   }));
 

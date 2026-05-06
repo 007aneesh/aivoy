@@ -13,7 +13,6 @@ export interface ServerTool {
   /** JSON Schema. Pass-through to the LLM. */
   parameters: Record<string, unknown>;
   webhookUrl: string;
-  webhookSecret: string;
   renderAs: string | null;
 }
 

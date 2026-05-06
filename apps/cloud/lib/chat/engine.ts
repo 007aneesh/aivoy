@@ -151,7 +151,11 @@ export async function* runTurn(
           const out = await invokeWebhook(
             tool,
             first.args,
-            { tenantId: ctx.tenant.id, tokenId: ctx.token.id },
+            {
+              tenantId: ctx.tenant.id,
+              tokenId: ctx.token.id,
+              signingSecret: ctx.tenant.webhookSigningSecret,
+            },
             signal,
           );
           entry = {

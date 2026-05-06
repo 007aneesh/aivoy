@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { generateWebhookSecret } from '@/lib/crypto';
 import { requireTenant } from '@/lib/auth-gate';
 
 const Schema = z.object({
@@ -56,14 +55,11 @@ export async function createTool(formData: FormData) {
     enabled: formData.get('enabled'),
   });
 
-  const webhookSecret = await generateWebhookSecret();
-
   await db.insert(schema.tools).values({
     tenantId: tenant.id,
     name: parsed.name,
     description: parsed.description,
     webhookUrl: parsed.webhookUrl,
-    webhookSecret,
     inputSchema: parsed.inputSchema,
     renderAs: parsed.renderAs ?? null,
     enabled: parsed.enabled,
@@ -105,19 +101,6 @@ export async function deleteTool(formData: FormData) {
 
   await db
     .delete(schema.tools)
-    .where(and(eq(schema.tools.id, id), eq(schema.tools.tenantId, tenant.id)));
-
-  revalidatePath('/dashboard/tools');
-}
-
-export async function rotateWebhookSecret(formData: FormData) {
-  const tenant = await requireTenant();
-  const id = z.string().uuid().parse(formData.get('id'));
-
-  const webhookSecret = await generateWebhookSecret();
-  await db
-    .update(schema.tools)
-    .set({ webhookSecret })
     .where(and(eq(schema.tools.id, id), eq(schema.tools.tenantId, tenant.id)));
 
   revalidatePath('/dashboard/tools');

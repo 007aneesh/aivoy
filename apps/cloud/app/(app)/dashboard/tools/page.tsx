@@ -4,6 +4,7 @@ import { requireTenant } from '@/lib/auth-gate';
 import { Empty, PageHeader, Section } from '@/components/ui';
 import { ToolForm } from './ToolForm';
 import { ToolRow, type ToolViewModel } from './ToolRow';
+import { WebhookSecretPanel } from './WebhookSecretPanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +22,6 @@ export default async function ToolsPage() {
     name: t.name,
     description: t.description,
     webhookUrl: t.webhookUrl,
-    webhookSecret: t.webhookSecret,
     inputSchema: t.inputSchema,
     renderAs: t.renderAs,
     enabled: t.enabled,
@@ -33,6 +33,13 @@ export default async function ToolsPage() {
         title="Tools"
         description="When the LLM calls a tool, aivoy POSTs the args to your webhook (HMAC-SHA256 signed). Whatever JSON you return is fed back into the conversation."
       />
+
+      <Section
+        title="Webhook signing secret"
+        description="One secret for every tool below. Adding a new tool requires zero new env vars on your server."
+      >
+        <WebhookSecretPanel initial={tenant.webhookSigningSecret} />
+      </Section>
 
       <Section title="Configured tools">
         {tools.length === 0 ? (

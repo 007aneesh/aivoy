@@ -25,6 +25,12 @@ export const tenants = pgTable(
     clerkUserId: text('clerk_user_id'),
     name: text('name').notNull(),
     plan: text('plan').notNull().default('free'),
+    /**
+     * One HMAC secret per tenant, used to sign EVERY webhook aivoy posts to
+     * the tenant's tools. Single env var on the consumer side; rotate without
+     * touching individual tool configs.
+     */
+    webhookSigningSecret: text('webhook_signing_secret').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -117,9 +123,6 @@ export const tools = pgTable(
     name: text('name').notNull(),
     description: text('description').notNull(),
     webhookUrl: text('webhook_url').notNull(),
-    /** Tenant-managed shared secret for HMAC signing. Stored plaintext —
-     * it is essentially a webhook auth credential, not user data. */
-    webhookSecret: text('webhook_secret').notNull(),
     /** JSON Schema for the tool's input. Validated against the LLM's call
      * server-side before invoking the webhook. */
     inputSchema: jsonb('input_schema').$type<Record<string, unknown>>().notNull(),
