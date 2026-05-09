@@ -25,7 +25,7 @@ export interface WebhookResult {
 export async function invokeWebhook(
   tool: ServerTool,
   args: Record<string, unknown>,
-  ctx: { tenantId: string; tokenId: string; signingSecret: string },
+  ctx: { tenantId: string; tokenId: string; signingSecret: string; requestId?: string },
   signal: AbortSignal,
 ): Promise<WebhookResult> {
   const payload = JSON.stringify({
@@ -55,6 +55,7 @@ export async function invokeWebhook(
         'Content-Type': 'application/json',
         'X-Aivoy-Signature': `t=${ts},v1=${signature}`,
         'User-Agent': 'aivoy-webhook/1.0',
+        ...(ctx.requestId ? { 'X-Aivoy-Request-Id': ctx.requestId } : {}),
       },
       body: payload,
       signal: ac.signal,

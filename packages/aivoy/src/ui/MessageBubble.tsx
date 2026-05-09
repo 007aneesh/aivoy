@@ -23,6 +23,15 @@ function humanizeToolName(name: string, status: ToolCallRecord['status']): strin
 
 export function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user';
+  // A finalized assistant turn with literally nothing to show happens when
+  // the model terminated empty (rare Llama failure mode the cloud now
+  // retries — but we defend here too in case the retry itself is empty).
+  // Render nothing rather than a blank chat bubble.
+  const hasVisible =
+    message.parts.length > 0 ||
+    message.pending ||
+    (message.toolCalls ?? []).some((tc) => tc.status !== 'done');
+  if (!isUser && !hasVisible) return null;
   return (
     <div
       className={`aivoy-msg ${isUser ? 'aivoy-msg--user' : 'aivoy-msg--assistant'}`}
