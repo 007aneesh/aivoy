@@ -37,7 +37,11 @@ export async function* runGemini(
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    yield { type: 'error', error: `Gemini ${res.status}: ${text || res.statusText}` };
+    if (res.status === 429) {
+      yield { type: 'error', error: 'Too many requests right now. Please wait a moment and try again.' };
+    } else {
+      yield { type: 'error', error: `Gemini ${res.status}: ${text || res.statusText}` };
+    }
     return;
   }
 
