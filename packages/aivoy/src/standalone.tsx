@@ -72,7 +72,7 @@ async function mount(opts: MountOptions): Promise<void> {
         suggestedPrompts: config.suggestedPrompts ?? [],
       }}
       theme={theme}
-      persistence={{ strategy: 'local', key: `aivoy:${opts.token.slice(0, 12)}` }}
+      persistence={{ strategy: 'session', key: `aivoy:${opts.token.slice(0, 12)}` }}
     />,
   );
 }
@@ -116,7 +116,7 @@ async function fetchConfig(host: string, token: string): Promise<AssistantConfig
   const json = (await res.json()) as { assistant?: AssistantConfigPayload };
   return (
     json.assistant ?? {
-      name: 'Assistant',
+      name: 'Ask Aivoy',
     }
   );
 }

@@ -122,7 +122,7 @@ export interface ThemeConfig {
 }
 
 export interface PersistenceConfig {
-  strategy: 'none' | 'local' | 'remote';
+  strategy: 'none' | 'session' | 'local' | 'remote';
   key?: string;
   load?: () => Promise<Message[] | null> | Message[] | null;
   save?: (messages: Message[]) => Promise<void> | void;

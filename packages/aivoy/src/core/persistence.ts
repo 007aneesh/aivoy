@@ -1,10 +1,18 @@
 import type { Message, PersistenceConfig } from './types';
 
 const SCHEMA_VERSION = 1;
+const DEFAULT_KEY = 'aivoy:thread';
 
 interface Stored {
   v: number;
   messages: Message[];
+}
+
+function pickStorage(strategy: PersistenceConfig['strategy']): Storage | null {
+  if (typeof window === 'undefined') return null;
+  if (strategy === 'session') return window.sessionStorage;
+  if (strategy === 'local') return window.localStorage;
+  return null;
 }
 
 export async function loadThread(cfg: PersistenceConfig): Promise<Message[]> {
@@ -15,10 +23,11 @@ export async function loadThread(cfg: PersistenceConfig): Promise<Message[]> {
     return Array.isArray(m) ? m : [];
   }
 
-  if (cfg.strategy === 'local' && typeof window !== 'undefined') {
-    const key = cfg.key ?? 'aivoy:thread';
+  const storage = pickStorage(cfg.strategy);
+  if (storage) {
+    const key = cfg.key ?? DEFAULT_KEY;
     try {
-      const raw = window.localStorage.getItem(key);
+      const raw = storage.getItem(key);
       if (!raw) return [];
       const parsed = JSON.parse(raw) as Stored;
       if (parsed?.v !== SCHEMA_VERSION) return [];
@@ -41,13 +50,14 @@ export function saveThread(cfg: PersistenceConfig, messages: Message[]): void {
     return;
   }
 
-  if (cfg.strategy === 'local' && typeof window !== 'undefined') {
-    const key = cfg.key ?? 'aivoy:thread';
+  const storage = pickStorage(cfg.strategy);
+  if (storage) {
+    const key = cfg.key ?? DEFAULT_KEY;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       try {
         const payload: Stored = { v: SCHEMA_VERSION, messages };
-        window.localStorage.setItem(key, JSON.stringify(payload));
+        storage.setItem(key, JSON.stringify(payload));
       } catch {
         // ignore quota / private mode failures
       }
@@ -56,9 +66,10 @@ export function saveThread(cfg: PersistenceConfig, messages: Message[]): void {
 }
 
 export function clearThread(cfg: PersistenceConfig): void {
-  if (cfg.strategy === 'local' && typeof window !== 'undefined') {
+  const storage = pickStorage(cfg.strategy);
+  if (storage) {
     try {
-      window.localStorage.removeItem(cfg.key ?? 'aivoy:thread');
+      storage.removeItem(cfg.key ?? DEFAULT_KEY);
     } catch {
       // ignore
     }

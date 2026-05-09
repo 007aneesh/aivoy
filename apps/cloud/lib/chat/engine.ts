@@ -170,22 +170,25 @@ export async function* runTurn(
       }),
     );
 
-    // Emit a tool_status + card the FIRST time we see a unique (name,args).
-    // Subsequent repeats in later iterations stay invisible to the user.
+    // Surface only on first occurrence per (name, args). On success the card
+    // is the signal — emit chip only on error so failures aren't silent.
     for (const g of groups) {
       const entry = g.cached!;
       const first = g.calls[0]!;
       if (!entry.surfaced) {
         totals.toolCallCount += 1;
-        yield {
-          type: 'tool_status',
-          id: first.id,
-          name: first.name,
-          status: entry.ok ? 'done' : 'error',
-          renderAs: entry.renderAs,
-        };
-        if (entry.ok && entry.renderAs) {
-          yield { type: 'card', cardType: entry.renderAs, data: entry.result };
+        if (entry.ok) {
+          if (entry.renderAs) {
+            yield { type: 'card', cardType: entry.renderAs, data: entry.result };
+          }
+        } else {
+          yield {
+            type: 'tool_status',
+            id: first.id,
+            name: first.name,
+            status: 'error',
+            renderAs: entry.renderAs,
+          };
         }
         entry.surfaced = true;
       }
@@ -235,7 +238,7 @@ function stableStringify(value: unknown): string {
 
 function buildSystemPrompt(assistant: Assistant | null): string {
   const lines: string[] = [];
-  const name = assistant?.name ?? 'Assistant';
+  const name = assistant?.name ?? 'Ask Aivoy';
   lines.push(
     `You are ${name}, an AI concierge embedded inside a web application. ` +
       'Be concise, helpful, and grounded. When you need real data, call a tool — do not fabricate. ' +
