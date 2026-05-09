@@ -3,13 +3,18 @@ import { NextResponse } from 'next/server';
 
 const isProtectedRoute = createRouteMatcher(['/dashboard(.*)']);
 
-// The public chat API authenticates via Bearer token, NOT Clerk — exclude it
+// The public embed API authenticates via Bearer token, NOT Clerk — exclude it
 // from Clerk's auth machinery. We also short-circuit OPTIONS so cross-origin
 // browser preflights don't spend a Clerk request.
-const isPublicApiRoute = createRouteMatcher(['/api/v1/(.*)']);
+//
+// All customer-facing endpoints live under /embed/* (loader.js, standalone.js,
+// /embed/v1/config, /embed/v1/chat) so the WAF and middleware see one
+// coherent namespace. Internal dashboard routes stay under /api/* and are
+// auth-gated by Clerk via the matcher below.
+const isPublicEmbedRoute = createRouteMatcher(['/embed/(.*)']);
 
 export default clerkMiddleware(async (auth, req) => {
-  if (isPublicApiRoute(req)) {
+  if (isPublicEmbedRoute(req)) {
     if (req.method === 'OPTIONS') {
       return new NextResponse(null, {
         status: 204,

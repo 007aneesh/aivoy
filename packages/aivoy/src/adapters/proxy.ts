@@ -18,7 +18,7 @@ interface WireMessage {
 /**
  * Talks to a server that orchestrates the LLM + tools end-to-end and streams
  * back NDJSON ChatChunks. This is the wire format used by the aivoy cloud's
- * `/api/v1/chat` and is also the recommended shape for any custom backend.
+ * `/embed/v1/chat` and is also the recommended shape for any custom backend.
  *
  * Server contract:
  *   POST <url>
