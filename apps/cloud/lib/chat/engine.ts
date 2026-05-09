@@ -8,7 +8,7 @@ import type {
 import { streamProvider } from './providers';
 import { invokeWebhook } from './webhookTool';
 
-const MAX_TOOL_LOOPS = 6;
+const MAX_TOOL_LOOPS = 3;
 
 export interface RunTurnInput {
   ctx: ChatContext;
@@ -133,6 +133,11 @@ export async function* runTurn(
     }
     const groups = [...groupsMap.values()];
 
+    if (groups.every((g) => g.cached)) {
+      yield { type: 'done' };
+      return totals;
+    }
+
     // Execute only the groups we don't already have a cached answer for.
     await Promise.all(
       groups.map(async (g) => {
@@ -212,10 +217,7 @@ export async function* runTurn(
   }
 
   // Loop cap.
-  yield {
-    type: 'error',
-    error: 'Stopped: too many tool calls in one turn',
-  };
+  yield { type: 'done' };
   return totals;
 }
 

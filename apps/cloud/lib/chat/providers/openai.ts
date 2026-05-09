@@ -42,7 +42,13 @@ export async function* runOpenAI(
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    yield { type: 'error', error: `OpenAI ${res.status}: ${text || res.statusText}` };
+    if (res.status === 429) {
+      const retryMatch = /try again in ([\d.]+)s/i.exec(text);
+      const retry = retryMatch ? ` Please try again in ~${Math.ceil(parseFloat(retryMatch[1]!))}s.` : ' Please wait a moment and try again.';
+      yield { type: 'error', error: `Too many requests right now.${retry}` };
+    } else {
+      yield { type: 'error', error: `OpenAI ${res.status}: ${text || res.statusText}` };
+    }
     return;
   }
 
