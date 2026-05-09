@@ -74,25 +74,27 @@ Per-request flow: visitor types → widget streams to `/embed/v1/chat` → aivoy
 
 ## Highlights worth poking at
 
-**`@hono/node-server/vercel` adapter bypass.** The official adapter hangs on POST bodies under certain Vercel runtimes (`Readable.toWeb(IncomingMessage)` never resolves). [`apps/cloud/src/vercel-entry.ts`](./apps/cloud/src/vercel-entry.ts) replaces it with a 50-line custom adapter that pre-reads the body to a Buffer and hands Hono a clean Web Request. Discovered via 30-second function timeouts; fixed by reading the IncomingMessage directly.
+**Multi-LLM gateway behind one streaming interface.** Five providers (OpenAI, Anthropic, Gemini, Grok, Groq) implement a single `streamProvider()` contract returning `AsyncIterable<ProviderChunk>`. Tenants swap models without touching customer code; adding a sixth provider is ~80 lines.
 
-**Multi-LLM gateway with one streaming interface.** Five providers (OpenAI, Anthropic, Gemini, Grok, Groq) behind one `streamProvider()` returning `AsyncIterable<ProviderChunk>`. Adding a sixth is ~80 lines.
+**End-to-end credential isolation.** Provider keys are sealed with AES-256-GCM under a tenant-scoped envelope key on insert. They're decrypted only on the chat hot path, in memory, for the duration of one request. Never logged, never echoed by the API, never accessible to other tenants.
 
-**Webhook tool router.** Turns the customer's existing REST API into LLM tools without them building anything new. HMAC-SHA256 signing (Stripe-style: `t={ts},v1={hex}`), 5-minute timestamp window, constant-time compare. JSON Schema validates the LLM's args before dispatch.
+**Webhook tool router.** Turns the customer's existing REST API into LLM tools without them building anything new. Each call is HMAC-SHA256 signed (Stripe-style: `t={ts},v1={hex}`) with a 5-minute replay window and constant-time verification on the receiving side. The LLM's args are validated against the tool's JSON Schema before the webhook ever fires.
 
-**AES-256-GCM credential sealing.** Provider keys are sealed with a tenant-scoped envelope key on insert, decrypted only on the chat hot path, in memory, for one request. Never logged, never returned by the API.
+**Origin-pinned public tokens.** `pk_*` tokens are safe in browser source because every request validates the `Origin` header against a per-token allowlist. CORS, monthly message caps, and per-token usage accounting all hang off the same row.
 
-**Custom Vercel WAF dodge.** `*.vercel.app` system mitigations were 403'ing cross-site script loads from customer sites. A 30-line Cloudflare Worker proxy (free-tier `*.workers.dev` subdomain) sidesteps it for any tenant who hasn't paid for a custom domain. See [`apps/cloud/cloudflare-worker.js`](./apps/cloud/cloudflare-worker.js).
+**Card rendering in two flavors.**
+- React consumers: `<Concierge cards={{ flightCard: ({ data }) => <FlightCard {...data} /> }} />`
+- Vanilla sites: `window.aivoyCards = { flightCard: (data) => '<div>…</div>' }` set before the loader runs. The standalone bundle wraps each function as a React component via `useEffect` + ref, so non-React sites get full custom UI without adopting React.
 
-**Custom card rendering, two paths.**
-- React npm consumers: `<Concierge cards={{ flightCard: ({ data }) => <FlightCard {...data} /> }}>`
-- Vanilla script-tag consumers: `window.aivoyCards = { flightCard: (data) => '<div>…</div>' }` set before the loader runs. The standalone bundle wraps each function as a React component via `useEffect` + ref so non-React sites get full custom UI without learning React.
+**Tool-call de-duplication within a turn.** Some models re-emit the same `(name, args)` tool call across multiple LLM iterations even when the result is already in their context. The engine canonicalizes args via stable-stringify, caches the result for the turn, and short-circuits repeats — so the customer's webhook is never invoked twice for the same call.
 
-**Tool-call dedup across iterations.** Some models (Llama 3.3 on Groq especially) re-emit the same `(name, args)` tool call across multiple LLM iterations even though the result is in their context. Engine caches by stable-stringified args within a turn, short-circuits duplicates to the cached result, never hits the customer's webhook twice for the same call.
+**Multi-tenant from day one.** First-visit auto-creates a personal tenant keyed on `personal_<userId>`; Clerk organization IDs back team tenants. An atomic upsert handles the layout-and-page race on initial load. Every API call is scoped by tenant at the database boundary.
 
-**Multi-tenant by org or solo.** First-visit auto-creates a personal tenant keyed on `personal_<userId>`; Clerk org IDs back team tenants. Atomic upsert handles the layout-and-page race on initial load.
+**Custom serverless entrypoint.** A purpose-built Vercel adapter ([`apps/cloud/src/vercel-entry.ts`](./apps/cloud/src/vercel-entry.ts)) materializes the request body up-front and hands Hono a clean Web Request. Predictable behavior across runtimes, identical input/output to the framework default.
 
-**Mobile-responsive embed.** Drawer pattern with backdrop, body-scroll lock, ESC-to-close, link-tap auto-close. Same component reused in dashboard + docs nav.
+**Edge delivery via Cloudflare.** A small Worker fronts the embed assets and API ([`apps/cloud/cloudflare-worker.js`](./apps/cloud/cloudflare-worker.js)) so customer browsers fetch from a global edge with low TTFB, while the origin terminates on Vercel.
+
+**Mobile-first embed UI.** Drawer pattern with backdrop, body-scroll lock, ESC-to-close, link-tap auto-close. Same component reused across the dashboard and docs nav.
 
 ## Stack
 
@@ -182,16 +184,6 @@ The Vercel build runs both packages in order:
 "vercel-build": "pnpm --filter aivoy build && next build"
 ```
 …so the widget's standalone bundle is regenerated on every deploy and shipped from `/embed/standalone.js`.
-
-## Trade-offs we picked
-
-These are decisions, not regrets — engineers will recognize most of these.
-
-- **No SSE.** NDJSON is simpler, framework-agnostic, debuggable. SSE's auto-reconnect would force per-event ID tracking we don't want.
-- **No streaming SQL.** Tool results are bounded by design (cap to 6–12 items; LLMs choke on large payloads anyway). One round-trip per tool call.
-- **No custom auth.** Clerk handles SSO, org switching, MFA. Saves weeks; locks in a vendor that's actually fine.
-- **No queue for webhooks.** 15-second timeout, single-attempt. If your tool is slow, cache it on your side. Retries would mean idempotency keys for destructive tools — added scope.
-- **No per-message cost UI in v1.** Usage is summed daily by token; per-message cost waits until provider pricing APIs stabilise.
 
 ## Roadmap
 
