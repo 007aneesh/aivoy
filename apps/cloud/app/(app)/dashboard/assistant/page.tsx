@@ -43,6 +43,8 @@ export default async function AssistantPage() {
                   systemPrompt: assistant.systemPrompt,
                   suggestedPrompts: assistant.suggestedPrompts ?? [],
                   providerCredentialId: assistant.providerCredentialId,
+                  avatarUrl: assistant.avatarUrl,
+                  theme: assistant.theme as Record<string, unknown> | null,
                 }
               : null
           }

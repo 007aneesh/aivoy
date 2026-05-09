@@ -1,3 +1,12 @@
+/**
+ * aivoy embed loader. Drop-in:
+ *   <script src="https://YOUR-AIVOY-HOST/embed/loader.js"
+ *           data-token="pk_..."
+ *           async></script>
+ *
+ * The loader reads `data-token` from its own <script> tag, derives the host
+ * from its src URL, and lazy-loads the standalone widget bundle.
+ */
 (function () {
   if (typeof window === 'undefined') return;
   if (window.__aivoyLoaded) return;
