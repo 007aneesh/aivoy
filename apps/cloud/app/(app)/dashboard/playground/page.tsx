@@ -27,7 +27,7 @@ export default async function PlaygroundPage() {
     <div>
       <PageHeader
         title="Playground"
-        description="Live test of /api/v1/chat using your most recent active token."
+        description="Live test of /embed/v1/chat using your most recent active token."
       />
 
       {!token ? (

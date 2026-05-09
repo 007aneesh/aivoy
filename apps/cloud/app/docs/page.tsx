@@ -179,7 +179,7 @@ import 'aivoy/styles.css';
 
 <Concierge
   adapter={proxyAdapter({
-    url: 'https://YOUR-AIVOY-HOST/api/v1/chat',
+    url: 'https://YOUR-AIVOY-HOST/embed/v1/chat',
     headers: { Authorization: 'Bearer pk_...' },
   })}
   assistant={{ name: 'Aivoy' }}
@@ -223,7 +223,7 @@ if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
 
         <Section id="chat-api">
           <H2>Chat API</H2>
-          <Code block>{`POST /api/v1/chat
+          <Code block>{`POST /embed/v1/chat
 Authorization: Bearer pk_...
 Origin: https://your-app.com
 Content-Type: application/json
@@ -246,7 +246,8 @@ Content-Type: application/json
         <Section id="config-api">
           <H2>Config API</H2>
           <p>Used by the embed loader to populate the widget's name, greeting, and theme.</p>
-          <Code block>{`GET /api/v1/config?token=pk_...
+          <Code block>{`GET /embed/v1/config
+Authorization: Bearer pk_...
 Origin: https://your-app.com
 
 → {

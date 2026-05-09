@@ -55,7 +55,7 @@ async function mount(opts: MountOptions): Promise<void> {
   const theme = { ...(config.theme ?? {}), ...(opts.theme ?? {}) };
 
   const adapter = proxyAdapter({
-    url: `${host}/api/v1/chat`,
+    url: `${host}/embed/v1/chat`,
     headers: () => ({ Authorization: `Bearer ${opts.token}` }),
   });
 
@@ -102,8 +102,13 @@ function resolveContainer(target?: MountOptions['target']): HTMLElement {
 }
 
 async function fetchConfig(host: string, token: string): Promise<AssistantConfigPayload> {
-  const url = `${host}/api/v1/config?token=${encodeURIComponent(token)}`;
-  const res = await fetch(url, { credentials: 'omit' });
+  // Token goes in the Authorization header (matching /embed/v1/chat) so
+  // it never leaks into URLs, server access logs, referrers, or CDN
+  // analytics. Same auth shape as the chat endpoint, one mental model.
+  const res = await fetch(`${host}/embed/v1/config`, {
+    credentials: 'omit',
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Aivoy.mount: config fetch failed (${res.status}): ${text}`);
