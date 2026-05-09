@@ -16,7 +16,12 @@ export interface CardPart {
   card: Card;
 }
 
-export type MessagePart = TextPart | CardPart;
+export interface ErrorPart {
+  kind: 'error';
+  error: string;
+}
+
+export type MessagePart = TextPart | CardPart | ErrorPart;
 
 export type Role = 'user' | 'assistant' | 'system';
 
@@ -84,6 +89,11 @@ export type ChatChunk =
       renderAs?: string | null;
     }
   | { type: 'card'; cardType: string; data: unknown }
+  /** Cloud-emitted: the LLM called a tool the WIDGET registered locally
+   *  (e.g. browser geolocation). The proxy adapter normalises this into
+   *  a `tool_call` chunk so the engine's existing tool-execution path
+   *  handles it transparently. */
+  | { type: 'client_tool_call'; id: string; name: string; args: unknown }
   | { type: 'done' }
   | { type: 'error'; error: string };
 

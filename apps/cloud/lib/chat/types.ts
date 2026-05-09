@@ -31,9 +31,29 @@ export interface ChatContext {
 }
 
 /** A wire-format message sent from the widget. */
-export interface WireMessage {
-  role: 'user' | 'assistant';
-  content: string;
+export type WireMessage =
+  | { role: 'user'; content: string }
+  | {
+      role: 'assistant';
+      content?: string;
+      toolCalls?: { id: string; name: string; args: Record<string, unknown> }[];
+    }
+  | {
+      role: 'tool';
+      toolCallId: string;
+      name: string;
+      result?: unknown;
+      isError?: boolean;
+    };
+
+/** Client-side tool definition supplied by the widget per turn. The cloud
+ *  exposes these to the LLM alongside server-registered tools, but never
+ *  invokes them — when the LLM calls one, we emit a `client_tool_call`
+ *  chunk and the widget runs it locally. */
+export interface ClientToolDef {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
 }
 
 /** Wire chunks the server streams back as NDJSON. Mirrors the package's ChatChunk
@@ -43,13 +63,14 @@ export type ServerChunk =
   | { type: 'text'; delta: string }
   | { type: 'tool_status'; id: string; name: string; status: 'running' | 'done' | 'error'; renderAs?: string | null }
   | { type: 'card'; cardType: string; data: unknown }
+  | { type: 'client_tool_call'; id: string; name: string; args: Record<string, unknown> }
   | { type: 'done' }
   | { type: 'error'; error: string };
 
 /** Provider-level streaming chunks — what individual provider runners emit. */
 export type ProviderChunk =
   | { type: 'text'; delta: string }
-  | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown> }
+  | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown>; argsParseError?: string }
   | { type: 'usage'; inputTokens: number; outputTokens: number }
   | { type: 'error'; error: string }
   | { type: 'done' };

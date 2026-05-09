@@ -5,7 +5,8 @@ export function messageToText(m: Message): string {
   return m.parts
     .map((p) => {
       if (p.kind === 'text') return p.text;
-      return `[card:${p.card.type} ${JSON.stringify(p.card.data)}]`;
+      if (p.kind === 'card') return `[card:${p.card.type} ${JSON.stringify(p.card.data)}]`;
+      return `[error: ${p.error}]`;
     })
     .join('\n');
 }

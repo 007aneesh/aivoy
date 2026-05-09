@@ -154,6 +154,10 @@ export const integrationTokens = pgTable(
     label: text('label').notNull().default('default'),
     allowedOrigins: jsonb('allowed_origins').$type<string[]>().notNull().default([]),
     monthlyMessageCap: integer('monthly_message_cap'),
+    /** Daily input+output token cap. NULL = unlimited. Resets every UTC day. */
+    dailyTokenCap: integer('daily_token_cap'),
+    /** Hard ceiling on tokens spent in a single turn (one user message). NULL = unlimited. */
+    perTurnTokenCap: integer('per_turn_token_cap'),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
