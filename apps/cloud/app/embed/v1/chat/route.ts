@@ -11,6 +11,7 @@ import { ChatAuthError, loadChatContext } from '@/lib/chat/tokenContext';
 import { runTurn } from '@/lib/chat/engine';
 import { checkTokenRateLimit, checkTokenDailyBudget } from '@/lib/chat/rateLimit';
 import type { ServerChunk, WireMessage } from '@/lib/chat/types';
+import { log, newRequestId } from '@/lib/log';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,6 +58,9 @@ export async function OPTIONS(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const origin = req.headers.get('origin');
+  const requestId =
+    req.headers.get('x-aivoy-request-id') ?? newRequestId();
+  const startedAt = Date.now();
 
   let parsed: { messages: WireMessage[]; clientTools?: { name: string; description: string; parameters: Record<string, unknown> }[] };
   try {
@@ -149,6 +153,7 @@ export async function POST(req: NextRequest) {
     'Cache-Control': 'no-cache, no-transform',
     'X-Accel-Buffering': 'no',
     Connection: 'keep-alive',
+    'X-Aivoy-Request-Id': requestId,
     ...corsHeaders(origin),
     ...rateLimitHeaders,
   });
@@ -164,10 +169,13 @@ export async function POST(req: NextRequest) {
         ctx,
         messages: parsed.messages,
         clientTools: parsed.clientTools ?? [],
+        requestId,
         signal: req.signal,
       });
 
       let totals = { inputTokens: 0, outputTokens: 0, toolCallCount: 0 };
+      let status: 'ok' | 'error' = 'ok';
+      let errorMessage: string | undefined;
       try {
         while (true) {
           const next = await generator.next();
@@ -175,20 +183,41 @@ export async function POST(req: NextRequest) {
             totals = next.value;
             break;
           }
+          if (next.value.type === 'error') status = 'error';
           writeChunk(controller, next.value);
         }
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        writeChunk(controller, { type: 'error', error: msg });
+        status = 'error';
+        errorMessage = e instanceof Error ? e.message : String(e);
+        writeChunk(controller, { type: 'error', error: errorMessage });
         writeChunk(controller, { type: 'done' });
       } finally {
         controller.close();
       }
 
+      log.info('chat.turn', {
+        requestId,
+        tenantId: ctx.tenant.id,
+        tokenId: ctx.token.id,
+        provider: ctx.credential.provider,
+        model: ctx.credential.model,
+        latencyMs: Date.now() - startedAt,
+        inputTokens: totals.inputTokens,
+        outputTokens: totals.outputTokens,
+        toolCallCount: totals.toolCallCount,
+        status,
+        ...(errorMessage ? { error: errorMessage } : {}),
+      });
+
       // Best-effort: log usage + bump last_used_at. Don't await on the stream
       // path; failures here shouldn't impact the user-visible response.
       void recordUsage(ctx, totals).catch((err) => {
-        console.error('usage logging failed', err);
+        log.error('usage_logging_failed', {
+          requestId,
+          tenantId: ctx.tenant.id,
+          tokenId: ctx.token.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
     },
     cancel(reason) {

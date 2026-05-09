@@ -9,6 +9,7 @@ import type {
 } from './types';
 import { streamProvider } from './providers';
 import { invokeWebhook } from './webhookTool';
+import { log } from '../log';
 
 const MAX_TOOL_LOOPS = 3;
 
@@ -20,6 +21,8 @@ export interface RunTurnInput {
    *  invokes them — when the LLM calls one, we emit a `client_tool_call`
    *  chunk and end the turn so the widget can run it locally and resume. */
   clientTools: ClientToolDef[];
+  /** Correlates with route-level + webhook logs for tracing. */
+  requestId: string;
   signal: AbortSignal;
 }
 
@@ -36,7 +39,7 @@ export interface RunTurnTotals {
 export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ServerChunk, RunTurnTotals> {
-  const { ctx, messages, clientTools, signal } = input;
+  const { ctx, messages, clientTools, requestId, signal } = input;
   const system = buildSystemPrompt(ctx.assistant);
 
   // Convert wire messages to provider-shape. The widget can now send
@@ -147,6 +150,50 @@ export async function* runTurn(
     }
 
     if (toolCalls.length === 0) {
+      // Llama 3.3 sometimes terminates a turn with neither text nor tool
+      // calls — usually after a tool result whose shape it doesn't know
+      // how to narrate. Don't leave the user staring at an empty bubble:
+      // retry once with a no-tools prompt forcing a textual reply.
+      if (assistantText.trim().length === 0) {
+        log.warn('chat.empty_turn_retry', {
+          requestId,
+          tenantId: ctx.tenant.id,
+          tokenId: ctx.token.id,
+        });
+        const retry = streamProvider(ctx.credential, {
+          apiKey: ctx.apiKey,
+          system:
+            system +
+            '\n\nThe previous turn produced no reply. Summarize the most recent tool ' +
+            'result for the user in plain language — DO NOT call any tools.',
+          messages: providerHistory,
+          tools: [],
+          signal,
+        });
+        let retryText = '';
+        for await (const chunk of retry) {
+          if (signal.aborted) break;
+          if (chunk.type === 'text') {
+            retryText += chunk.delta;
+            yield { type: 'text', delta: chunk.delta };
+          } else if (chunk.type === 'usage') {
+            totals.inputTokens += chunk.inputTokens;
+            totals.outputTokens += chunk.outputTokens;
+          } else if (chunk.type === 'error') {
+            yield { type: 'error', error: chunk.error };
+            break;
+          }
+        }
+        if (retryText.trim().length === 0) {
+          // Retry also empty — surface a friendly fallback so the bubble
+          // isn't silently blank.
+          yield {
+            type: 'text',
+            delta:
+              "I couldn't generate a reply for that. Could you rephrase or give me more detail?",
+          };
+        }
+      }
       yield { type: 'done' };
       return totals;
     }
@@ -254,6 +301,7 @@ export async function* runTurn(
             surfaced: false,
           };
         } else {
+          const webhookStart = Date.now();
           const out = await invokeWebhook(
             tool,
             first.args,
@@ -261,9 +309,18 @@ export async function* runTurn(
               tenantId: ctx.tenant.id,
               tokenId: ctx.token.id,
               signingSecret: ctx.tenant.webhookSigningSecret,
+              requestId,
             },
             signal,
           );
+          log.info('chat.tool_invoke', {
+            requestId,
+            tenantId: ctx.tenant.id,
+            tool: first.name,
+            httpStatus: out.status,
+            ok: out.ok,
+            latencyMs: Date.now() - webhookStart,
+          });
           entry = {
             ok: out.ok,
             result: out.ok ? out.result : { error: out.result },
@@ -373,8 +430,9 @@ function buildSystemPrompt(assistant: Assistant | null): string {
     `You are ${name}, an AI concierge embedded inside a web application. ` +
       'Be concise, helpful, and grounded. When you need real data, call a tool — do not fabricate. ' +
       'Prefer rendering structured results via tools (which the UI turns into rich cards) over long prose. ' +
-      'If a request depends on a location (city/country/neighborhood) and the user has not provided one, ' +
-      'ASK them where they want to look before calling any tool — never invent or assume a location. ' +
+      'If a request depends on a location (city, country, neighborhood, or coordinates) and the user has not provided one, ' +
+      'ASK them where they want to look OR call the getUserLocation client tool if available — never invent or assume a location. ' +
+      'A getUserLocation tool result containing { lat, lng } IS a valid location: pass those coordinates as args to subsequent search tools. ' +
       'Do not narrate a location in your reply unless the user supplied it or a tool returned it. ' +
       'When the user states constraints (price, guests, amenities, dates), ALWAYS pass them as the corresponding ' +
       'tool arguments — never filter results yourself in prose. The cards rendered to the user come directly from ' +
