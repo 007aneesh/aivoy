@@ -113,12 +113,43 @@ export async function* runTurn(
     const toolCalls: { id: string; name: string; args: Record<string, unknown>; argsParseError?: string }[] = [];
     let assistantText = '';
     let errored = false;
+    // Llama 3.3 sometimes "describes" tool calls as pseudo-XML in the text
+    // channel (e.g. `<function=foo args=...>`). Buffer until we're confident
+    // the text isn't leaked syntax, then flush. The buffer is intentionally
+    // tiny so streaming feel survives.
+    const LEAK_BUFFER_MAX = 120;
+    const LEAK_RE = /<function\s*=|<tool\s*=|^\[tool:|^\{"?function/i;
+    let leakBuffer = '';
+    let leakDetected = false;
+    let bufferFlushed = false;
+    const flushBuffer = function* (): Generator<ServerChunk> {
+      if (bufferFlushed) return;
+      if (leakBuffer) yield { type: 'text', delta: leakBuffer };
+      leakBuffer = '';
+      bufferFlushed = true;
+    };
 
     for await (const chunk of stream) {
       if (signal.aborted) return totals;
 
       if (chunk.type === 'text') {
         assistantText += chunk.delta;
+        if (leakDetected) {
+          // Already detected — silently drop the rest, retry at end.
+          continue;
+        }
+        if (!bufferFlushed) {
+          leakBuffer += chunk.delta;
+          if (LEAK_RE.test(leakBuffer)) {
+            leakDetected = true;
+            leakBuffer = '';
+            continue;
+          }
+          if (leakBuffer.length >= LEAK_BUFFER_MAX) {
+            yield* flushBuffer();
+          }
+          continue;
+        }
         yield { type: 'text', delta: chunk.delta };
       } else if (chunk.type === 'tool_call') {
         toolCalls.push({
@@ -136,6 +167,21 @@ export async function* runTurn(
       } else if (chunk.type === 'done') {
         // single-loop terminator — handled by leaving the for-await
       }
+    }
+
+    // Flush any clean text the leak-detector was holding back.
+    if (!leakDetected) {
+      yield* flushBuffer();
+    } else {
+      log.warn('chat.tool_leak_suppressed', {
+        requestId,
+        tenantId: ctx.tenant.id,
+        tokenId: ctx.token.id,
+        sample: assistantText.slice(0, 200),
+      });
+      // Treat the turn as if it had produced no text — the empty-turn retry
+      // path below will make a clean follow-up call.
+      assistantText = '';
     }
 
     if (errored) return totals;
@@ -430,6 +476,11 @@ function buildSystemPrompt(assistant: Assistant | null): string {
     `You are ${name}, an AI concierge embedded inside a web application. ` +
       'Be concise, helpful, and grounded. When you need real data, call a tool — do not fabricate. ' +
       'Prefer rendering structured results via tools (which the UI turns into rich cards) over long prose. ' +
+      // Tool-call hygiene — Llama 3.3 sometimes leaks pseudo-XML like `<function=…/>` into the text channel.
+      // Be explicit so the model uses the structured tool_calls field instead.
+      'CRITICAL: To call a tool, use the structured tool-calling mechanism. NEVER write tool calls as text — ' +
+      'no `<function=name args=...>`, no `[tool: name(...)]`, no JSON-shaped tool descriptions. Only use the ' +
+      'actual tool you have access to by its exact registered name; do not invent tool names. ' +
       'If a request depends on a location (city, country, neighborhood, or coordinates) and the user has not provided one, ' +
       'ASK them where they want to look OR call the getUserLocation client tool if available — never invent or assume a location. ' +
       'A getUserLocation tool result containing { lat, lng } IS a valid location: pass those coordinates as args to subsequent search tools. ' +
