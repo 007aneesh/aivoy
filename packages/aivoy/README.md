@@ -6,7 +6,7 @@ A drop-in AI concierge widget for React apps. Streaming responses, tool calls, c
 npm install aivoy
 ```
 
-Pairs with the [aivoy cloud](https://github.com/aneeshwiz/aivoy) for a managed multi-LLM gateway, or works against any server that streams ND-JSON.
+Pairs with the [aivoy cloud](https://github.com/007aneesh/aivoy) for a managed multi-LLM gateway, or works against any server that streams ND-JSON.
 
 ## Quick start
 
@@ -73,7 +73,7 @@ Use the script tag for marketing sites, Webflow, Shopify themes, plain HTML. Use
 
 ## Tools
 
-Tools are how the assistant pulls live data. The widget itself doesn't define them — your server does. With the [aivoy cloud](https://github.com/aneeshwiz/aivoy) you register tools in a dashboard; with your own server, you implement the chat endpoint to dispatch them.
+Tools are how the assistant pulls live data. The widget itself doesn't define them — your server does. With the [aivoy cloud](https://github.com/007aneesh/aivoy) you register tools in a dashboard; with your own server, you implement the chat endpoint to dispatch them.
 
 Each tool call surfaces in the widget as a status chip while running, and the result either renders as a card (when the server sets `renderAs`) or feeds back to the LLM as raw JSON for narration.
 

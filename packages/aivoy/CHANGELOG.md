@@ -6,6 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Fixed
+- `repository`, `homepage`, and `bugs` URLs corrected to `github.com/007aneesh/aivoy`. No code changes — metadata only.
+
 ### Added
 - `cards` prop on `<Concierge>` accepts a map of `cardType → React.ComponentType<{ data }>` for custom card rendering.
 - `window.aivoyCards` global on the standalone bundle — non-React sites can register vanilla functions returning HTML strings or `HTMLElement`. Wrapped automatically as React components.

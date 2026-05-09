@@ -1,6 +1,6 @@
 {
   "name": "aivoy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Drop-in AI concierge widget for React apps. Streaming, tool calls, custom cards.",
   "license": "MIT",
   "type": "module",
@@ -67,12 +67,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/aneeshwiz/aivoy.git",
+    "url": "git+https://github.com/007aneesh/aivoy.git",
     "directory": "packages/aivoy"
   },
-  "homepage": "https://github.com/aneeshwiz/aivoy#readme",
+  "homepage": "https://github.com/007aneesh/aivoy#readme",
   "bugs": {
-    "url": "https://github.com/aneeshwiz/aivoy/issues"
+    "url": "https://github.com/007aneesh/aivoy/issues"
   },
   "keywords": [
     "ai",
