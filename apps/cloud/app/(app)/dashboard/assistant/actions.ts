@@ -6,20 +6,13 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireTenant } from '@/lib/auth-gate';
 
+const optionalString = (max: number) =>
+  z.string().trim().max(max).optional().or(z.literal('').transform(() => undefined));
+
 const Schema = z.object({
   name: z.string().trim().min(1).max(60),
-  greeting: z
-    .string()
-    .trim()
-    .max(280)
-    .optional()
-    .or(z.literal('').transform(() => undefined)),
-  systemPrompt: z
-    .string()
-    .trim()
-    .max(4000)
-    .optional()
-    .or(z.literal('').transform(() => undefined)),
+  greeting: optionalString(280),
+  systemPrompt: optionalString(4000),
   suggestedPrompts: z
     .string()
     .transform((s) =>
@@ -29,11 +22,19 @@ const Schema = z.object({
         .filter(Boolean)
         .slice(0, 8),
     ),
-  providerCredentialId: z
-    .string()
-    .uuid()
-    .optional()
-    .or(z.literal('').transform(() => undefined)),
+  providerCredentialId: z.string().uuid().optional().or(z.literal('').transform(() => undefined)),
+  avatarUrl: optionalString(500).pipe(
+    z.union([z.string().url(), z.undefined()]).optional(),
+  ),
+  themeAccent: optionalString(20).pipe(
+    z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex like #7c3aed')
+      .or(z.undefined())
+      .optional(),
+  ),
+  themeMode: z.enum(['auto', 'light', 'dark']).optional(),
+  themePosition: z.enum(['bottom-right', 'bottom-left']).optional(),
 });
 
 export async function saveAssistant(formData: FormData) {
@@ -44,9 +45,12 @@ export async function saveAssistant(formData: FormData) {
     systemPrompt: formData.get('systemPrompt'),
     suggestedPrompts: formData.get('suggestedPrompts'),
     providerCredentialId: formData.get('providerCredentialId') || undefined,
+    avatarUrl: formData.get('avatarUrl'),
+    themeAccent: formData.get('themeAccent'),
+    themeMode: formData.get('themeMode') || undefined,
+    themePosition: formData.get('themePosition') || undefined,
   });
 
-  // Validate the credential belongs to this tenant if provided.
   if (parsed.providerCredentialId) {
     const [cred] = await db
       .select({ id: schema.providerCredentials.id })
@@ -56,26 +60,26 @@ export async function saveAssistant(formData: FormData) {
     if (!cred) throw new Error('Provider credential not found');
   }
 
+  const theme: Record<string, unknown> = {};
+  if (parsed.themeAccent)   theme.accent   = parsed.themeAccent;
+  if (parsed.themeMode)     theme.mode     = parsed.themeMode;
+  if (parsed.themePosition) theme.position = parsed.themePosition;
+
+  const row = {
+    tenantId: tenant.id,
+    name: parsed.name,
+    greeting: parsed.greeting ?? null,
+    systemPrompt: parsed.systemPrompt ?? null,
+    suggestedPrompts: parsed.suggestedPrompts,
+    providerCredentialId: parsed.providerCredentialId ?? null,
+    avatarUrl: parsed.avatarUrl ?? null,
+    theme,
+  };
+
   await db
     .insert(schema.assistants)
-    .values({
-      tenantId: tenant.id,
-      name: parsed.name,
-      greeting: parsed.greeting ?? null,
-      systemPrompt: parsed.systemPrompt ?? null,
-      suggestedPrompts: parsed.suggestedPrompts,
-      providerCredentialId: parsed.providerCredentialId ?? null,
-    })
-    .onConflictDoUpdate({
-      target: schema.assistants.tenantId,
-      set: {
-        name: parsed.name,
-        greeting: parsed.greeting ?? null,
-        systemPrompt: parsed.systemPrompt ?? null,
-        suggestedPrompts: parsed.suggestedPrompts,
-        providerCredentialId: parsed.providerCredentialId ?? null,
-      },
-    });
+    .values(row)
+    .onConflictDoUpdate({ target: schema.assistants.tenantId, set: row });
 
   revalidatePath('/dashboard/assistant');
   revalidatePath('/dashboard');

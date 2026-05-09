@@ -87,7 +87,7 @@ export const assistants = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenants.id, { onDelete: 'cascade' }),
-    name: text('name').notNull().default('Assistant'),
+    name: text('name').notNull().default('Aivoy'),
     avatarUrl: text('avatar_url'),
     greeting: text('greeting'),
     suggestedPrompts: jsonb('suggested_prompts').$type<string[]>().default([]),

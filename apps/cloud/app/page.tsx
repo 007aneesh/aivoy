@@ -5,10 +5,10 @@ export default function HomePage() {
   return (
     <>
       <Header />
-      <main style={{ maxWidth: 880, margin: '0 auto', padding: '64px 24px 96px' }}>
+      <main style={{ maxWidth: 880, margin: '0 auto', padding: 'clamp(40px, 8vw, 64px) clamp(20px, 4vw, 40px) 96px' }}>
         <h1
           style={{
-            fontSize: 56,
+            fontSize: 'clamp(32px, 8vw, 56px)',
             lineHeight: 1.05,
             margin: 0,
             letterSpacing: -1,
@@ -21,7 +21,7 @@ export default function HomePage() {
         <p
           style={{
             color: 'var(--muted)',
-            fontSize: 19,
+            fontSize: 'clamp(15px, 2.4vw, 19px)',
             marginTop: 18,
             maxWidth: 580,
             lineHeight: 1.5,

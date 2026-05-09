@@ -11,17 +11,28 @@ export interface AssistantFormProps {
     systemPrompt: string | null;
     suggestedPrompts: string[];
     providerCredentialId: string | null;
+    avatarUrl: string | null;
+    theme: Record<string, unknown> | null;
   } | null;
   providers: { id: string; label: string; provider: string; model: string }[];
 }
+
+const PRESET_ACCENTS = ['#6d28d9', '#2563eb', '#059669', '#dc2626', '#d97706', '#0f172a'];
 
 export function AssistantForm({ initial, providers }: AssistantFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
 
+  const themeAccent = (initial?.theme?.['accent'] as string | undefined) ?? '#6d28d9';
+  const themeMode = (initial?.theme?.['mode'] as string | undefined) ?? 'auto';
+  const themePosition = (initial?.theme?.['position'] as string | undefined) ?? 'bottom-right';
+
+  const [accent, setAccent] = useState(themeAccent);
+
   return (
     <form
+      className="form-grid"
       style={{ padding: 16 }}
       action={(fd) =>
         startTransition(async () => {
@@ -37,11 +48,11 @@ export function AssistantForm({ initial, providers }: AssistantFormProps) {
         })
       }
     >
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Field label="Assistant name" hint="What users see at the top of the panel.">
-          <Input name="name" required defaultValue={initial?.name ?? 'Assistant'} />
+      <div className="form-2col">
+        <Field label="Assistant name" hint="Shown in the chat header.">
+          <Input name="name" required defaultValue={initial?.name ?? 'Aivoy'} />
         </Field>
-        <Field label="Active provider" hint="Which LLM credential to route through.">
+        <Field label="Active provider" hint="Which LLM credential answers messages.">
           <Select
             name="providerCredentialId"
             defaultValue={initial?.providerCredentialId ?? ''}
@@ -57,7 +68,16 @@ export function AssistantForm({ initial, providers }: AssistantFormProps) {
         </Field>
       </div>
 
-      <Field label="Greeting" hint="Shown in the empty-state panel before the first message.">
+      <Field label="Avatar URL" hint="Optional. Square image shown in the chat header.">
+        <Input
+          name="avatarUrl"
+          type="url"
+          defaultValue={initial?.avatarUrl ?? ''}
+          placeholder="https://yourbrand.com/avatar.png"
+        />
+      </Field>
+
+      <Field label="Greeting" hint="First message shown when the chat opens.">
         <Textarea
           name="greeting"
           defaultValue={initial?.greeting ?? ''}
@@ -88,10 +108,70 @@ export function AssistantForm({ initial, providers }: AssistantFormProps) {
         />
       </Field>
 
-      {error && <p style={{ color: '#b91c1c', fontSize: 12, marginBottom: 12 }}>{error}</p>}
-      {saved && <p style={{ color: '#047857', fontSize: 12, marginBottom: 12 }}>Saved ✓</p>}
+      <h3 style={{ marginTop: 8, marginBottom: 4 }}>Theme</h3>
+      <p className="muted text-sm" style={{ marginTop: 0, marginBottom: 8 }}>
+        Visual customization for the embedded widget. All fields are optional.
+      </p>
+
+      <div className="form-2col">
+        <Field label="Accent colour" hint="Used for buttons, chips, and the launcher.">
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <input
+              type="color"
+              value={accent}
+              onChange={(e) => setAccent(e.target.value)}
+              style={{ width: 36, height: 36, border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 2, background: 'var(--bg-elevated)', cursor: 'pointer' }}
+              aria-label="Accent colour picker"
+            />
+            <Input
+              name="themeAccent"
+              value={accent}
+              onChange={(e) => setAccent(e.target.value)}
+              placeholder="#6d28d9"
+              pattern="^#[0-9a-fA-F]{6}$"
+            />
+          </div>
+          <div className="row" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+            {PRESET_ACCENTS.map((c) => (
+              <button
+                type="button"
+                key={c}
+                onClick={() => setAccent(c)}
+                aria-label={`Use ${c}`}
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: 999,
+                  background: c,
+                  border: accent.toLowerCase() === c ? '2px solid var(--fg)' : '1px solid var(--border)',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              />
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Color mode" hint="Match user's OS, or force one.">
+          <Select name="themeMode" defaultValue={themeMode}>
+            <option value="auto">Auto (follow OS)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </Select>
+        </Field>
+      </div>
+
+      <Field label="Launcher position" hint="Where the floating chat button sits on the page.">
+        <Select name="themePosition" defaultValue={themePosition}>
+          <option value="bottom-right">Bottom right</option>
+          <option value="bottom-left">Bottom left</option>
+        </Select>
+      </Field>
+
+      {error && <p style={{ color: 'var(--danger)', fontSize: 12, marginBottom: 12 }}>{error}</p>}
+      {saved && <p style={{ color: 'var(--success)', fontSize: 12, marginBottom: 12 }}>Saved ✓</p>}
       {providers.length === 0 && (
-        <p style={{ color: '#92400e', fontSize: 12, marginBottom: 12 }}>
+        <p style={{ color: 'var(--warning)', fontSize: 12, marginBottom: 12 }}>
           You need at least one provider before this assistant can answer messages.
         </p>
       )}

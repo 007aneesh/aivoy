@@ -2,13 +2,27 @@
  * Standalone IIFE bundle. Loaded by the cloud's <script src="…/embed/loader.js">.
  * Bundles React + ReactDOM + the widget so a host site does NOT need React.
  *
- * Exposes `window.Aivoy.mount({ token, host, target?, theme? })`.
+ * Exposes `window.Aivoy.mount({ token, host, target?, theme?, cards? })`.
+ *
+ * Custom cards from non-React sites:
+ *
+ *   <script>
+ *     window.aivoyCards = {
+ *       eventCard: (data) => `<a class="my-event" href="${data.url}">${data.title}</a>`,
+ *       // OR return an HTMLElement:
+ *       // weather: (data) => { const el=document.createElement('div'); el.textContent=data.temp; return el; }
+ *     };
+ *   </script>
+ *   <script src="…/embed/loader.js" data-token="pk_…" async></script>
  */
+import { createElement, useEffect, useRef, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Concierge } from './ui/Concierge';
 import { proxyAdapter } from './adapters/proxy';
 import type { ThemeConfig } from './core/types';
 import styles from './ui/styles.css?inline';
+
+type VanillaCardRenderer = (data: unknown) => string | HTMLElement | null | undefined;
 
 interface MountOptions {
   /** Public token (`pk_…`). Required. */
@@ -19,6 +33,12 @@ interface MountOptions {
   target?: string | HTMLElement;
   /** Theme overrides applied on top of the assistant's saved theme. */
   theme?: ThemeConfig;
+  /**
+   * Custom card renderers keyed by `cardType`. Each takes the tool result
+   * `data` and returns an HTML string OR an HTMLElement. Overrides built-in
+   * cards (`listingCards`, `productCards`, `link`) when keys match.
+   */
+  cards?: Record<string, VanillaCardRenderer>;
 }
 
 interface AssistantConfigPayload {
@@ -62,6 +82,11 @@ async function mount(opts: MountOptions): Promise<void> {
   const root = createRoot(container);
   mounted.set(container, root);
 
+  const cards = buildCardComponents({
+    ...readGlobalCards(),
+    ...(opts.cards ?? {}),
+  })
+
   root.render(
     <Concierge
       adapter={adapter}
@@ -72,9 +97,43 @@ async function mount(opts: MountOptions): Promise<void> {
         suggestedPrompts: config.suggestedPrompts ?? [],
       }}
       theme={theme}
+      cards={cards}
       persistence={{ strategy: 'session', key: `aivoy:${opts.token.slice(0, 12)}` }}
     />,
   );
+}
+
+function readGlobalCards(): Record<string, VanillaCardRenderer> {
+  if (typeof window === 'undefined') return {};
+  const fromGlobal = (window as unknown as { aivoyCards?: unknown }).aivoyCards;
+  if (!fromGlobal || typeof fromGlobal !== 'object') return {};
+  const out: Record<string, VanillaCardRenderer> = {};
+  for (const [k, v] of Object.entries(fromGlobal as Record<string, unknown>)) {
+    if (typeof v === 'function') out[k] = v as VanillaCardRenderer;
+  }
+  return out;
+}
+
+function buildCardComponents(
+  vanilla: Record<string, VanillaCardRenderer>,
+): Record<string, ComponentType<{ data: unknown }>> {
+  const out: Record<string, ComponentType<{ data: unknown }>> = {};
+  for (const [type, render] of Object.entries(vanilla)) {
+    out[type] = function VanillaCardWrapper({ data }: { data: unknown }) {
+      const ref = useRef<HTMLDivElement>(null);
+      useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const result = render(data);
+        el.innerHTML = '';
+        if (result == null) return;
+        if (typeof result === 'string') el.innerHTML = result;
+        else if (result instanceof HTMLElement) el.appendChild(result);
+      }, [data]);
+      return createElement('div', { className: 'aivoy-card-custom', ref });
+    };
+  }
+  return out;
 }
 
 function injectStyles() {
