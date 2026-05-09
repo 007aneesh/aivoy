@@ -212,6 +212,27 @@ hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
 
 .divider { height: 1px; background: var(--border); border: 0; margin: 16px 0; }
 
+.header-link {
+  color: var(--fg-soft);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: color 120ms, background 120ms;
+}
+.header-link:hover { color: var(--fg); background: var(--bg-hover); text-decoration: none; }
+
+.header-icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-soft);
+  transition: color 120ms, background 120ms;
+}
+.header-icon-link:hover { color: var(--fg); background: var(--bg-hover); }
+
 .kbd {
   font-family: var(--font-mono);
   font-size: 11px;
