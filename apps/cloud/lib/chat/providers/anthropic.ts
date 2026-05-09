@@ -1,4 +1,5 @@
 import type { ProviderChunk, ProviderMessage, ProviderRunArgs } from '../types';
+import { fetchWithRetry } from './retry';
 
 /** Anthropic Messages streaming (server-side, no dangerous-direct-browser flag). */
 export async function* runAnthropic(
@@ -23,23 +24,25 @@ export async function* runAnthropic(
     ...(tools ? { tools } : {}),
   };
 
-  const res = await fetch(`${baseUrl}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': args.apiKey,
-      'anthropic-version': '2023-06-01',
+  const { res, errorBody } = await fetchWithRetry(
+    `${baseUrl}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': args.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal: args.signal,
-  });
+    args.signal,
+  );
 
   if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => '');
     if (res.status === 429) {
       yield { type: 'error', error: 'Too many requests right now. Please wait a moment and try again.' };
     } else {
-      yield { type: 'error', error: `Anthropic ${res.status}: ${text || res.statusText}` };
+      yield { type: 'error', error: `Anthropic ${res.status}: ${errorBody || res.statusText}` };
     }
     return;
   }
@@ -107,12 +110,26 @@ export async function* runAnthropic(
           const slot = toolBlocks.get(json.index);
           if (slot) {
             let parsed: Record<string, unknown> = {};
-            try {
-              parsed = slot.argsJson ? (JSON.parse(slot.argsJson) as Record<string, unknown>) : {};
-            } catch {
-              parsed = {};
+            let parseError: string | undefined;
+            if (slot.argsJson) {
+              try {
+                const v = JSON.parse(slot.argsJson);
+                if (v && typeof v === 'object' && !Array.isArray(v)) {
+                  parsed = v as Record<string, unknown>;
+                } else {
+                  parseError = `tool arguments must be a JSON object, got ${typeof v}`;
+                }
+              } catch (e) {
+                parseError = `failed to parse tool arguments as JSON: ${e instanceof Error ? e.message : String(e)}`;
+              }
             }
-            yield { type: 'tool_call', id: slot.id, name: slot.name, args: parsed };
+            yield {
+              type: 'tool_call',
+              id: slot.id,
+              name: slot.name,
+              args: parsed,
+              ...(parseError ? { argsParseError: parseError } : {}),
+            };
             toolBlocks.delete(json.index);
           }
         } else if (json.type === 'message_stop') {

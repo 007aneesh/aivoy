@@ -1,6 +1,6 @@
 {
   "name": "aivoy",
-  "version": "0.1.2",
+  "version": "0.1.1",
   "description": "Drop-in AI concierge widget for React apps. Streaming, tool calls, custom cards.",
   "license": "MIT",
   "type": "module",

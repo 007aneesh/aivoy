@@ -1,8 +1,10 @@
 import type { Assistant } from '@/db/schema';
 import type {
   ChatContext,
+  ClientToolDef,
   ProviderMessage,
   ServerChunk,
+  ServerTool,
   WireMessage,
 } from './types';
 import { streamProvider } from './providers';
@@ -13,6 +15,11 @@ const MAX_TOOL_LOOPS = 3;
 export interface RunTurnInput {
   ctx: ChatContext;
   messages: WireMessage[];
+  /** Tools the WIDGET will execute (e.g. browser-only capabilities like
+   *  geolocation). Cloud merges these into the LLM tool list but never
+   *  invokes them — when the LLM calls one, we emit a `client_tool_call`
+   *  chunk and end the turn so the widget can run it locally and resume. */
+  clientTools: ClientToolDef[];
   signal: AbortSignal;
 }
 
@@ -29,17 +36,51 @@ export interface RunTurnTotals {
 export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ServerChunk, RunTurnTotals> {
-  const { ctx, messages, signal } = input;
+  const { ctx, messages, clientTools, signal } = input;
   const system = buildSystemPrompt(ctx.assistant);
 
-  // Convert wire messages to provider-shape (no tool turns yet — those are
-  // populated by the multi-turn loop below).
-  let providerHistory: ProviderMessage[] = messages.map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // Convert wire messages to provider-shape. The widget can now send
+  // assistant turns with toolCalls (when resuming after a client tool ran)
+  // and tool result messages — pass both through verbatim.
+  let providerHistory: ProviderMessage[] = messages.map<ProviderMessage>((m) => {
+    if (m.role === 'user') return { role: 'user', content: m.content };
+    if (m.role === 'tool') {
+      return {
+        role: 'tool',
+        toolCallId: m.toolCallId,
+        toolName: m.name,
+        toolResult: m.result,
+        toolIsError: m.isError ?? false,
+      };
+    }
+    return {
+      role: 'assistant',
+      content: m.content,
+      ...(m.toolCalls && m.toolCalls.length > 0 ? { toolCalls: m.toolCalls } : {}),
+    };
+  });
+
+  // Combined tool list visible to the LLM. Server-registered tools execute
+  // via webhook; client tools shape-match ServerTool but are flagged with a
+  // null webhookUrl so we can short-circuit them in the loop below.
+  const clientToolNames = new Set(clientTools.map((t) => t.name));
+  const combinedTools: ServerTool[] = [
+    ...ctx.tools,
+    ...clientTools.map<ServerTool>((t) => ({
+      id: `client:${t.name}`,
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+      webhookUrl: '',
+      renderAs: null,
+    })),
+  ];
 
   const totals: RunTurnTotals = { inputTokens: 0, outputTokens: 0, toolCallCount: 0 };
+  const perTurnCap = ctx.token.perTurnTokenCap ?? null;
+  let budgetExceeded = false;
+  const overBudget = () =>
+    perTurnCap != null && totals.inputTokens + totals.outputTokens >= perTurnCap;
 
   // Turn-level cache. Some models (Llama 3.3 on Groq) repeat the same
   // (name, args) tool call across separate iterations even though the result
@@ -62,11 +103,11 @@ export async function* runTurn(
       apiKey: ctx.apiKey,
       system,
       messages: providerHistory,
-      tools: ctx.tools,
+      tools: combinedTools,
       signal,
     });
 
-    const toolCalls: { id: string; name: string; args: Record<string, unknown> }[] = [];
+    const toolCalls: { id: string; name: string; args: Record<string, unknown>; argsParseError?: string }[] = [];
     let assistantText = '';
     let errored = false;
 
@@ -77,7 +118,12 @@ export async function* runTurn(
         assistantText += chunk.delta;
         yield { type: 'text', delta: chunk.delta };
       } else if (chunk.type === 'tool_call') {
-        toolCalls.push(chunk);
+        toolCalls.push({
+          id: chunk.id,
+          name: chunk.name,
+          args: chunk.args,
+          ...(chunk.argsParseError ? { argsParseError: chunk.argsParseError } : {}),
+        });
       } else if (chunk.type === 'usage') {
         totals.inputTokens += chunk.inputTokens;
         totals.outputTokens += chunk.outputTokens;
@@ -91,7 +137,43 @@ export async function* runTurn(
 
     if (errored) return totals;
 
+    if (overBudget()) {
+      budgetExceeded = true;
+      yield {
+        type: 'error',
+        error: `Per-turn token budget reached (${perTurnCap} tokens). Stopping.`,
+      };
+      break;
+    }
+
     if (toolCalls.length === 0) {
+      yield { type: 'done' };
+      return totals;
+    }
+
+    // If the LLM called any CLIENT tool, hand it off to the widget. We emit
+    // each client tool call as `client_tool_call`, end the turn, and let
+    // the widget run them locally then re-POST the conversation with the
+    // tool results appended. Server-side tool calls in the same response
+    // are dropped — mixing client + server tool dispatch in one turn is
+    // not supported.
+    const clientCalls = toolCalls.filter((tc) => clientToolNames.has(tc.name));
+    if (clientCalls.length > 0) {
+      for (const tc of clientCalls) {
+        if (tc.argsParseError) {
+          yield {
+            type: 'error',
+            error: `Invalid arguments for ${tc.name}: ${tc.argsParseError}`,
+          };
+          continue;
+        }
+        yield {
+          type: 'client_tool_call',
+          id: tc.id,
+          name: tc.name,
+          args: tc.args,
+        };
+      }
       yield { type: 'done' };
       return totals;
     }
@@ -133,9 +215,18 @@ export async function* runTurn(
     }
     const groups = [...groupsMap.values()];
 
-    if (groups.every((g) => g.cached)) {
-      yield { type: 'done' };
-      return totals;
+    // Emit a 'running' chip for every fresh (uncached) group BEFORE we kick
+    // off webhooks, so the user sees something happening during the request.
+    for (const g of groups) {
+      if (g.cached) continue;
+      const first = g.calls[0]!;
+      yield {
+        type: 'tool_status',
+        id: first.id,
+        name: first.name,
+        status: 'running',
+        renderAs: g.renderAs,
+      };
     }
 
     // Execute only the groups we don't already have a cached answer for.
@@ -145,7 +236,17 @@ export async function* runTurn(
         const first = g.calls[0]!;
         const tool = ctx.tools.find((t) => t.name === first.name);
         let entry: CachedResult;
-        if (!tool) {
+        if (first.argsParseError) {
+          // Don't run the webhook — feed the parse error back so the model retries.
+          entry = {
+            ok: false,
+            result: {
+              error: `Invalid arguments for tool ${first.name}: ${first.argsParseError}. Retry the tool call with valid JSON arguments matching the tool's schema.`,
+            },
+            renderAs: g.renderAs,
+            surfaced: false,
+          };
+        } else if (!tool) {
           entry = {
             ok: false,
             result: { error: `Unknown tool: ${first.name}` },
@@ -175,25 +276,24 @@ export async function* runTurn(
       }),
     );
 
-    // Surface only on first occurrence per (name, args). On success the card
-    // is the signal — emit chip only on error so failures aren't silent.
+    // Surface only on first occurrence per (name, args). Emit a final
+    // 'done'/'error' status chip for every fresh group, then the card on
+    // success. The chip is what flips the "spinner" emitted above to a
+    // checkmark on the widget side.
     for (const g of groups) {
       const entry = g.cached!;
       const first = g.calls[0]!;
       if (!entry.surfaced) {
         totals.toolCallCount += 1;
-        if (entry.ok) {
-          if (entry.renderAs) {
-            yield { type: 'card', cardType: entry.renderAs, data: entry.result };
-          }
-        } else {
-          yield {
-            type: 'tool_status',
-            id: first.id,
-            name: first.name,
-            status: 'error',
-            renderAs: entry.renderAs,
-          };
+        yield {
+          type: 'tool_status',
+          id: first.id,
+          name: first.name,
+          status: entry.ok ? 'done' : 'error',
+          renderAs: entry.renderAs,
+        };
+        if (entry.ok && entry.renderAs) {
+          yield { type: 'card', cardType: entry.renderAs, data: entry.result };
         }
         entry.surfaced = true;
       }
@@ -216,7 +316,35 @@ export async function* runTurn(
     ];
   }
 
-  // Loop cap.
+  // Loop cap reached: do one final no-tools call so the model is forced to
+  // narrate what it found instead of leaving the user with bare cards.
+  // Skip if we exited early due to per-turn budget — another LLM call would
+  // defeat the cap.
+  if (!signal.aborted && !budgetExceeded) {
+    const wrapStream = streamProvider(ctx.credential, {
+      apiKey: ctx.apiKey,
+      system:
+        system +
+        '\n\nYou have used the maximum number of tool calls for this turn. ' +
+        'Summarize what you found for the user using the tool results already in context. Do NOT call any more tools.',
+      messages: providerHistory,
+      tools: [],
+      signal,
+    });
+    for await (const chunk of wrapStream) {
+      if (signal.aborted) break;
+      if (chunk.type === 'text') {
+        yield { type: 'text', delta: chunk.delta };
+      } else if (chunk.type === 'usage') {
+        totals.inputTokens += chunk.inputTokens;
+        totals.outputTokens += chunk.outputTokens;
+      } else if (chunk.type === 'error') {
+        yield { type: 'error', error: chunk.error };
+        break;
+      }
+    }
+  }
+
   yield { type: 'done' };
   return totals;
 }
@@ -244,7 +372,13 @@ function buildSystemPrompt(assistant: Assistant | null): string {
   lines.push(
     `You are ${name}, an AI concierge embedded inside a web application. ` +
       'Be concise, helpful, and grounded. When you need real data, call a tool — do not fabricate. ' +
-      'Prefer rendering structured results via tools (which the UI turns into rich cards) over long prose.',
+      'Prefer rendering structured results via tools (which the UI turns into rich cards) over long prose. ' +
+      'If a request depends on a location (city/country/neighborhood) and the user has not provided one, ' +
+      'ASK them where they want to look before calling any tool — never invent or assume a location. ' +
+      'Do not narrate a location in your reply unless the user supplied it or a tool returned it. ' +
+      'When the user states constraints (price, guests, amenities, dates), ALWAYS pass them as the corresponding ' +
+      'tool arguments — never filter results yourself in prose. The cards rendered to the user come directly from ' +
+      'the tool result, so under-specifying the tool call shows results that contradict your written reply.',
   );
   if (assistant?.systemPrompt) {
     lines.push('\n--- Additional instructions ---');

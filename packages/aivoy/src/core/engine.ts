@@ -150,7 +150,7 @@ export async function runTurn(
           textBuffer = '';
           callbacks.upsertAssistant({ ...assistantMsg, parts: [...assistantMsg.parts] });
         } else if (chunk.type === 'error') {
-          assistantMsg.parts.push({ kind: 'text', text: `\n_Error: ${chunk.error}_` });
+          assistantMsg.parts.push({ kind: 'error', error: chunk.error });
           callbacks.upsertAssistant({ ...assistantMsg });
           emit({ type: 'error', error: chunk.error });
         } else if (chunk.type === 'done') {
@@ -159,7 +159,7 @@ export async function runTurn(
       }
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      assistantMsg.parts.push({ kind: 'text', text: `\n_Error: ${error}_` });
+      assistantMsg.parts.push({ kind: 'error', error });
       callbacks.upsertAssistant({ ...assistantMsg });
       emit({ type: 'error', error });
       callbacks.finalize(assistantMsg.id);
@@ -222,8 +222,8 @@ export async function runTurn(
 
   // Safety: hit the loop cap.
   assistantMsg.parts.push({
-    kind: 'text',
-    text: '\n_Stopped: too many tool calls in one turn._',
+    kind: 'error',
+    error: 'Stopped: too many tool calls in one turn.',
   });
   callbacks.upsertAssistant({ ...assistantMsg });
   callbacks.finalize(assistantMsg.id);

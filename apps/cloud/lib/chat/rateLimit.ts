@@ -61,3 +61,55 @@ function startOfNextMonthUtc(): Date {
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 }
+
+export interface TokenBudgetResult {
+  exceeded: boolean;
+  cap: number | null;
+  used: number;
+  remaining: number;
+  /** Unix seconds at which the count resets (start of next UTC day). */
+  resetAt: number;
+}
+
+/**
+ * Sums input+output tokens spent today (UTC) and reports whether the *next*
+ * turn would exceed the daily cap. A turn that hasn't started yet costs ≥1
+ * token, so we treat used >= cap as exceeded. Same race-y caveat as the
+ * monthly counter.
+ */
+export async function checkTokenDailyBudget(
+  tokenId: string,
+  tenantId: string,
+  cap: number | null,
+): Promise<TokenBudgetResult> {
+  const resetAt = Math.floor(startOfNextDayUtc().getTime() / 1000);
+
+  if (cap == null) {
+    return { exceeded: false, cap: null, used: 0, remaining: Infinity, resetAt };
+  }
+
+  const startOfDay = sql`date_trunc('day', now() at time zone 'utc')`;
+  const [row] = await db
+    .select({
+      total: sql<number>`coalesce(sum(${schema.usageEvents.inputTokens} + ${schema.usageEvents.outputTokens}), 0)::int`,
+    })
+    .from(schema.usageEvents)
+    .where(
+      and(
+        eq(schema.usageEvents.tokenId, tokenId),
+        eq(schema.usageEvents.tenantId, tenantId),
+        gte(schema.usageEvents.createdAt, startOfDay),
+      ),
+    );
+
+  const used = row?.total ?? 0;
+  const remaining = Math.max(0, cap - used);
+  return { exceeded: used >= cap, cap, used, remaining, resetAt };
+}
+
+function startOfNextDayUtc(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1),
+  );
+}

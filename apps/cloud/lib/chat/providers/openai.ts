@@ -1,4 +1,5 @@
 import type { ProviderChunk, ProviderMessage, ProviderRunArgs } from '../types';
+import { fetchWithRetry } from './retry';
 
 /**
  * OpenAI Chat Completions streaming, server-side.
@@ -30,24 +31,24 @@ export async function* runOpenAI(
     ...(tools ? { tools } : {}),
   };
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${args.apiKey}`,
+  const { res, errorBody } = await fetchWithRetry(
+    `${baseUrl}/chat/completions`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${args.apiKey}`,
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal: args.signal,
-  });
+    args.signal,
+  );
 
   if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => '');
     if (res.status === 429) {
-      const retryMatch = /try again in ([\d.]+)s/i.exec(text);
-      const retry = retryMatch ? ` Please try again in ~${Math.ceil(parseFloat(retryMatch[1]!))}s.` : ' Please wait a moment and try again.';
-      yield { type: 'error', error: `Too many requests right now.${retry}` };
+      yield { type: 'error', error: 'Too many requests right now. Please wait a moment and try again.' };
     } else {
-      yield { type: 'error', error: `OpenAI ${res.status}: ${text || res.statusText}` };
+      yield { type: 'error', error: `OpenAI ${res.status}: ${errorBody || res.statusText}` };
     }
     return;
   }
@@ -124,12 +125,29 @@ function* flushTools(
   for (const [, tc] of pending) {
     if (!tc.id || !tc.name) continue;
     let parsed: Record<string, unknown> = {};
-    try {
-      parsed = tc.args ? (JSON.parse(tc.args) as Record<string, unknown>) : {};
-    } catch {
-      // bad JSON from the model — pass through empty args; tool will likely error
+    let parseError: string | undefined;
+    if (tc.args) {
+      try {
+        const v = JSON.parse(tc.args);
+        if (v == null) {
+          // Model emitted "null" — treat as no args (valid for empty-schema tools).
+          parsed = {};
+        } else if (typeof v === 'object' && !Array.isArray(v)) {
+          parsed = v as Record<string, unknown>;
+        } else {
+          parseError = `tool arguments must be a JSON object, got ${Array.isArray(v) ? 'array' : typeof v}`;
+        }
+      } catch (e) {
+        parseError = `failed to parse tool arguments as JSON: ${e instanceof Error ? e.message : String(e)}`;
+      }
     }
-    yield { type: 'tool_call', id: tc.id, name: tc.name, args: parsed };
+    yield {
+      type: 'tool_call',
+      id: tc.id,
+      name: tc.name,
+      args: parsed,
+      ...(parseError ? { argsParseError: parseError } : {}),
+    };
   }
   pending.clear();
 }

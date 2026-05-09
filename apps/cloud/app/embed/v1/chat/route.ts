@@ -9,22 +9,43 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { ChatAuthError, loadChatContext } from '@/lib/chat/tokenContext';
 import { runTurn } from '@/lib/chat/engine';
-import { checkTokenRateLimit } from '@/lib/chat/rateLimit';
+import { checkTokenRateLimit, checkTokenDailyBudget } from '@/lib/chat/rateLimit';
 import type { ServerChunk, WireMessage } from '@/lib/chat/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const ToolCallSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  args: z.record(z.unknown()),
+});
+
+const WireMessageSchema = z.discriminatedUnion('role', [
+  z.object({ role: z.literal('user'), content: z.string() }),
+  z.object({
+    role: z.literal('assistant'),
+    content: z.string().optional(),
+    toolCalls: z.array(ToolCallSchema).optional(),
+  }),
+  z.object({
+    role: z.literal('tool'),
+    toolCallId: z.string().min(1),
+    name: z.string().min(1),
+    result: z.unknown(),
+    isError: z.boolean().optional(),
+  }),
+]);
+
+const ClientToolSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().default(''),
+  parameters: z.record(z.unknown()).default({}),
+});
+
 const Body = z.object({
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string(),
-      }),
-    )
-    .min(1)
-    .max(200),
+  messages: z.array(WireMessageSchema).min(1).max(200),
+  clientTools: z.array(ClientToolSchema).optional(),
 });
 
 export async function OPTIONS(req: NextRequest) {
@@ -37,7 +58,7 @@ export async function OPTIONS(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const origin = req.headers.get('origin');
 
-  let parsed: { messages: WireMessage[] };
+  let parsed: { messages: WireMessage[]; clientTools?: { name: string; description: string; parameters: Record<string, unknown> }[] };
   try {
     const json = await req.json();
     parsed = Body.parse(json);
@@ -69,6 +90,36 @@ export async function POST(req: NextRequest) {
         : Math.max(0, rateLimit.remaining).toString(),
     'X-RateLimit-Reset': rateLimit.resetAt.toString(),
   };
+  // Daily token budget — separate from the monthly message cap. Useful when
+  // operators want to cap *spend* (which scales with tokens) rather than
+  // raw turn count.
+  const dailyBudget = await checkTokenDailyBudget(
+    ctx.token.id,
+    ctx.tenant.id,
+    ctx.token.dailyTokenCap,
+  );
+  if (dailyBudget.exceeded) {
+    return new NextResponse(
+      JSON.stringify({
+        error: `Daily token budget of ${dailyBudget.cap} reached. Resets ${new Date(
+          dailyBudget.resetAt * 1000,
+        ).toISOString()}.`,
+      }),
+      {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          ...corsHeaders(origin),
+          ...rateLimitHeaders,
+          'Retry-After': Math.max(
+            1,
+            dailyBudget.resetAt - Math.floor(Date.now() / 1000),
+          ).toString(),
+        },
+      },
+    );
+  }
+
   if (rateLimit.exceeded) {
     return new NextResponse(
       JSON.stringify({
@@ -112,6 +163,7 @@ export async function POST(req: NextRequest) {
       const generator = runTurn({
         ctx,
         messages: parsed.messages,
+        clientTools: parsed.clientTools ?? [],
         signal: req.signal,
       });
 

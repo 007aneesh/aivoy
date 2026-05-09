@@ -17,9 +17,10 @@
  */
 import { createElement, useEffect, useRef, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { z } from 'zod';
 import { Concierge } from './ui/Concierge';
 import { proxyAdapter } from './adapters/proxy';
-import type { ThemeConfig } from './core/types';
+import { defineTool, type ThemeConfig, type Tool } from './core/types';
 import styles from './ui/styles.css?inline';
 
 type VanillaCardRenderer = (data: unknown) => string | HTMLElement | null | undefined;
@@ -98,7 +99,8 @@ async function mount(opts: MountOptions): Promise<void> {
       }}
       theme={theme}
       cards={cards}
-      persistence={{ strategy: 'session', key: `aivoy:${opts.token.slice(0, 12)}` }}
+      tools={builtinClientTools()}
+      persistence={{ strategy: 'local', key: `aivoy:${opts.token.slice(0, 12)}` }}
     />,
   );
 }
@@ -134,6 +136,61 @@ function buildCardComponents(
     };
   }
   return out;
+}
+
+/**
+ * Built-in tools the WIDGET runs locally (browser-only capabilities the
+ * cloud cannot perform). Cached per-mount: the geolocation prompt fires
+ * the first time the LLM asks; subsequent calls reuse the same fix.
+ */
+let cachedGeo: { lat: number; lng: number; capturedAt: number } | null = null;
+
+function builtinClientTools(): Tool<any, any>[] {
+  return [
+    defineTool({
+      name: 'getUserLocation',
+      description:
+        "Get the current user's approximate geographic location (latitude/longitude) " +
+        'via the browser. Use this whenever the user asks for "nearby" results or ' +
+        'mentions their current location without naming a city. Triggers a one-time ' +
+        'browser permission prompt; if denied or unavailable, returns an error and ' +
+        'you should ASK the user to type a city instead. Do NOT call repeatedly.',
+      input: z.object({}).strict(),
+      run: async () => {
+        if (cachedGeo && Date.now() - cachedGeo.capturedAt < 30 * 60_000) {
+          return { lat: cachedGeo.lat, lng: cachedGeo.lng, source: 'cache' as const };
+        }
+        if (typeof navigator === 'undefined' || !navigator.geolocation) {
+          throw new Error('geolocation unavailable in this browser');
+        }
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: false,
+            timeout: 10_000,
+            maximumAge: 5 * 60_000,
+          });
+        }).catch((e: GeolocationPositionError | Error) => {
+          const msg =
+            'code' in e
+              ? e.code === 1
+                ? 'permission denied'
+                : e.code === 2
+                  ? 'position unavailable'
+                  : e.code === 3
+                    ? 'timeout'
+                    : 'unknown geolocation error'
+              : e.message;
+          throw new Error(msg);
+        });
+        cachedGeo = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          capturedAt: Date.now(),
+        };
+        return { lat: cachedGeo.lat, lng: cachedGeo.lng, source: 'browser' as const };
+      },
+    }),
+  ];
 }
 
 function injectStyles() {

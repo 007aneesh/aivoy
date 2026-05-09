@@ -1,4 +1,5 @@
 import type { ProviderChunk, ProviderMessage, ProviderRunArgs } from '../types';
+import { fetchWithRetry } from './retry';
 
 /** Gemini streaming via streamGenerateContent (SSE). */
 export async function* runGemini(
@@ -28,19 +29,21 @@ export async function* runGemini(
   };
 
   const url = `${baseUrl}/models/${args.model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(args.apiKey)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: args.signal,
-  });
+  const { res, errorBody } = await fetchWithRetry(
+    url,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    args.signal,
+  );
 
   if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => '');
     if (res.status === 429) {
       yield { type: 'error', error: 'Too many requests right now. Please wait a moment and try again.' };
     } else {
-      yield { type: 'error', error: `Gemini ${res.status}: ${text || res.statusText}` };
+      yield { type: 'error', error: `Gemini ${res.status}: ${errorBody || res.statusText}` };
     }
     return;
   }
