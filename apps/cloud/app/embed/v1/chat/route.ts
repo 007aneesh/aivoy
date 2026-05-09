@@ -5,7 +5,7 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { ChatAuthError, loadChatContext } from '@/lib/chat/tokenContext';
 import { runTurn } from '@/lib/chat/engine';
@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
   // Rate limit: per-token monthly message cap. Reject before we hit the LLM.
   const rateLimit = await checkTokenRateLimit(
     ctx.token.id,
+    ctx.tenant.id,
     ctx.token.monthlyMessageCap,
   );
   const rateLimitHeaders: Record<string, string> = {
@@ -165,7 +166,12 @@ async function recordUsage(
     await tx
       .update(schema.integrationTokens)
       .set({ lastUsedAt: sql`now()` })
-      .where(eq(schema.integrationTokens.id, ctx.token.id));
+      .where(
+        and(
+          eq(schema.integrationTokens.id, ctx.token.id),
+          eq(schema.integrationTokens.tenantId, ctx.tenant.id),
+        ),
+      );
   });
 }
 

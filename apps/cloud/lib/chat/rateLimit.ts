@@ -25,6 +25,7 @@ export interface RateLimitResult {
  */
 export async function checkTokenRateLimit(
   tokenId: string,
+  tenantId: string,
   cap: number | null,
 ): Promise<RateLimitResult> {
   const resetAt = Math.floor(startOfNextMonthUtc().getTime() / 1000);
@@ -40,6 +41,7 @@ export async function checkTokenRateLimit(
     .where(
       and(
         eq(schema.usageEvents.tokenId, tokenId),
+        eq(schema.usageEvents.tenantId, tenantId),
         gte(schema.usageEvents.createdAt, startOfMonth),
       ),
     );

@@ -2,12 +2,51 @@
 
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { requireTenant } from '@/lib/auth-gate';
 
 const optionalString = (max: number) =>
   z.string().trim().max(max).optional().or(z.literal('').transform(() => undefined));
+
+/** Empty → undefined; accepts http(s) URLs and bare domains (normalized to https://…). */
+function tryParseHttpUrl(raw: string): string | null {
+  const candidates = [
+    raw,
+    raw.startsWith('//') ? `https:${raw}` : null,
+    `https://${raw}`,
+  ].filter((x): x is string => !!x);
+  for (const c of candidates) {
+    try {
+      const u = new URL(c);
+      if (u.protocol === 'http:' || u.protocol === 'https:') return u.href;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+const optionalHttpAvatarUrl = z
+  .preprocess((raw) => {
+    if (raw === null || raw === undefined) return '';
+    return typeof raw === 'string' ? raw.trim() : '';
+  }, z.string().max(500))
+  .transform((s) => (s === '' ? undefined : s))
+  .superRefine((val, ctx) => {
+    if (val === undefined) return;
+    if (!tryParseHttpUrl(val)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Invalid URL — use a full link (https://…) or a domain like cdn.example.com/avatar.png',
+      });
+    }
+  })
+  .transform((val): string | undefined => {
+    if (val === undefined) return undefined;
+    return tryParseHttpUrl(val) ?? undefined;
+  });
 
 const Schema = z.object({
   name: z.string().trim().min(1).max(60),
@@ -23,9 +62,7 @@ const Schema = z.object({
         .slice(0, 8),
     ),
   providerCredentialId: z.string().uuid().optional().or(z.literal('').transform(() => undefined)),
-  avatarUrl: optionalString(500).pipe(
-    z.union([z.string().url(), z.undefined()]).optional(),
-  ),
+  avatarUrl: optionalHttpAvatarUrl,
   themeAccent: optionalString(20).pipe(
     z
       .string()
@@ -55,7 +92,12 @@ export async function saveAssistant(formData: FormData) {
     const [cred] = await db
       .select({ id: schema.providerCredentials.id })
       .from(schema.providerCredentials)
-      .where(eq(schema.providerCredentials.id, parsed.providerCredentialId))
+      .where(
+        and(
+          eq(schema.providerCredentials.id, parsed.providerCredentialId),
+          eq(schema.providerCredentials.tenantId, tenant.id),
+        ),
+      )
       .limit(1);
     if (!cred) throw new Error('Provider credential not found');
   }
