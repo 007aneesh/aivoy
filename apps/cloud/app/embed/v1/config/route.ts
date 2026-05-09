@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(
     {
       assistant: {
-        name: assistant?.name ?? 'Assistant',
+        name: assistant?.name ?? 'Ask Aivoy',
         avatarUrl: assistant?.avatarUrl ?? null,
         greeting: assistant?.greeting ?? null,
         suggestedPrompts: assistant?.suggestedPrompts ?? [],
