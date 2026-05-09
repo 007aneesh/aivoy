@@ -65,8 +65,21 @@ export async function loadChatContext(
     .where(eq(schema.assistants.tenantId, tenant.id))
     .limit(1);
 
-  // 5. Provider credential — assistant points at one, fall back to tenant's first.
-  let credentialId = assistant?.providerCredentialId ?? null;
+  // 5. Provider credential — assistant points at one (tenant-scoped); stale IDs fall back to tenant's first.
+  let credentialId: string | null = null;
+  if (assistant?.providerCredentialId) {
+    const [scoped] = await db
+      .select({ id: schema.providerCredentials.id })
+      .from(schema.providerCredentials)
+      .where(
+        and(
+          eq(schema.providerCredentials.id, assistant.providerCredentialId),
+          eq(schema.providerCredentials.tenantId, tenant.id),
+        ),
+      )
+      .limit(1);
+    credentialId = scoped?.id ?? null;
+  }
   if (!credentialId) {
     const [first] = await db
       .select({ id: schema.providerCredentials.id })
@@ -84,7 +97,12 @@ export async function loadChatContext(
   const [credential] = await db
     .select()
     .from(schema.providerCredentials)
-    .where(eq(schema.providerCredentials.id, credentialId))
+    .where(
+      and(
+        eq(schema.providerCredentials.id, credentialId),
+        eq(schema.providerCredentials.tenantId, tenant.id),
+      ),
+    )
     .limit(1);
   if (!credential) throw new ChatAuthError('Provider credential missing', 500);
 

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import type { CSSProperties } from 'react';
 import {
   ConciergeProvider,
   type ConciergeProviderProps,
@@ -27,14 +27,14 @@ function ConciergeShell() {
   const radius = theme.radius ?? 'lg';
   const mode = theme.mode ?? 'auto';
 
-  useEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty('--aivoy-accent', accent);
-  }, [accent]);
+  const rootStyle = {
+    '--aivoy-accent': accent,
+  } as CSSProperties;
 
   return (
     <div
       className="aivoy-root"
+      style={rootStyle}
       data-radius={radius}
       data-mode={mode}
       data-position={position}
