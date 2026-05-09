@@ -1,7 +1,7 @@
 {
   "name": "aivoy",
   "version": "0.1.0",
-  "description": "Drop-in AI concierge chatbot widget for React apps. Static context + dynamic tools + streaming + rich cards.",
+  "description": "Drop-in AI concierge widget for React apps. Streaming, tool calls, custom cards.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
@@ -9,7 +9,10 @@
   ],
   "files": [
     "dist",
-    "README.md"
+    "!dist/standalone.global.js",
+    "!dist/standalone.global.js.map",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -32,7 +35,8 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "test:demo": "cd examples/vanilla && vite"
+    "test:demo": "cd examples/vanilla && vite",
+    "prepublishOnly": "pnpm run clean && pnpm run typecheck && pnpm run build"
   },
   "peerDependencies": {
     "react": ">=18",
@@ -58,17 +62,32 @@
     "tsup": "^8.3.5",
     "typescript": "^5.6.3"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aneeshwiz/aivoy.git",
+    "directory": "packages/aivoy"
+  },
+  "homepage": "https://github.com/aneeshwiz/aivoy#readme",
+  "bugs": {
+    "url": "https://github.com/aneeshwiz/aivoy/issues"
+  },
   "keywords": [
     "ai",
     "chatbot",
     "concierge",
     "react",
+    "widget",
+    "streaming",
+    "tool-calls",
+    "function-calling",
     "openai",
     "anthropic",
     "gemini",
-    "streaming",
-    "tools",
-    "function-calling",
-    "widget"
+    "groq",
+    "llm",
+    "embeddable"
   ]
 }
