@@ -118,7 +118,15 @@ export async function* runTurn(
     // the text isn't leaked syntax, then flush. The buffer is intentionally
     // tiny so streaming feel survives.
     const LEAK_BUFFER_MAX = 120;
-    const LEAK_RE = /<function\s*=|<tool\s*=|^\[tool:|^\{"?function/i;
+    // Patterns Llama 3.3 leaks instead of using the tool_calls field. Each
+    // entry triggers suppression + retry as soon as the text channel matches.
+    const LEAK_RE =
+      /<function\s*=|<tool\s*=|^\[tool:|^\{"?function|<\|python_tag\|>|<\|tool_call\|>|<\|begin_of_tool|<\|tool_response\|>/i;
+    // End-of-stream sanity check — catches naked python-style function call
+    // descriptions like `getNearbyStays(lat=…)` that don't trip the streaming
+    // regex. Only used as a final guard, not for suppression mid-stream.
+    const LEAK_RE_FULL =
+      /(?:^|\n)\s*\w+\(\s*\w+\s*=/;
     let leakBuffer = '';
     let leakDetected = false;
     let bufferFlushed = false;
@@ -169,6 +177,22 @@ export async function* runTurn(
       }
     }
 
+    // End-of-stream second pass: belt-and-braces. Re-scan the full
+    // assistantText (including anything still buffered) against BOTH the
+    // streaming regex and the python-style function-call regex. Whatever
+    // slipped past the streaming detector gets caught here. The cost is
+    // that the leaked text already streamed to the widget — but the widget
+    // will receive a follow-up clean retry below, and the empty-bubble
+    // guard prevents the leaked-only bubble from rendering on its own.
+    const fullText = leakBuffer + assistantText;
+    if (
+      !leakDetected &&
+      toolCalls.length === 0 &&
+      (LEAK_RE.test(fullText) || LEAK_RE_FULL.test(fullText))
+    ) {
+      leakDetected = true;
+    }
+
     // Flush any clean text the leak-detector was holding back.
     if (!leakDetected) {
       yield* flushBuffer();
@@ -179,8 +203,10 @@ export async function* runTurn(
         tokenId: ctx.token.id,
         sample: assistantText.slice(0, 200),
       });
-      // Treat the turn as if it had produced no text — the empty-turn retry
-      // path below will make a clean follow-up call.
+      // Drop anything we were holding back — the empty-turn retry path
+      // below will make a clean follow-up call.
+      leakBuffer = '';
+      bufferFlushed = true;
       assistantText = '';
     }
 
