@@ -17,10 +17,10 @@
  */
 import { createElement, useEffect, useRef, type ComponentType } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { z } from 'zod';
 import { Concierge } from './ui/Concierge';
 import { proxyAdapter } from './adapters/proxy';
-import { defineTool, type ThemeConfig, type Tool } from './core/types';
+import { resolveBuiltinClientTools } from './standalone-tools';
+import type { ThemeConfig, Tool } from './core/types';
 import styles from './ui/styles.css?inline';
 
 type VanillaCardRenderer = (data: unknown) => string | HTMLElement | null | undefined;
@@ -48,6 +48,8 @@ interface AssistantConfigPayload {
   greeting?: string | null;
   suggestedPrompts?: string[];
   theme?: ThemeConfig;
+  /** Built-in browser-capability tools the cloud has enabled for this tenant. */
+  enabledClientTools?: string[];
 }
 
 const STYLE_ID = 'aivoy-styles';
@@ -99,7 +101,7 @@ async function mount(opts: MountOptions): Promise<void> {
       }}
       theme={theme}
       cards={cards}
-      tools={builtinClientTools()}
+      tools={mergeClientTools(config.enabledClientTools ?? [])}
       persistence={{ strategy: 'local', key: `aivoy:${opts.token.slice(0, 12)}` }}
     />,
   );
@@ -139,58 +141,65 @@ function buildCardComponents(
 }
 
 /**
- * Built-in tools the WIDGET runs locally (browser-only capabilities the
- * cloud cannot perform). Cached per-mount: the geolocation prompt fires
- * the first time the LLM asks; subsequent calls reuse the same fix.
+ * Merge order:
+ *   1. Built-in tools the cloud config enabled for this tenant.
+ *   2. Anything in `window.aivoyClientTools` (host-page injection — escape
+ *      hatch for custom tools beyond the built-in catalogue).
+ * Host-injected entries with the same name override built-ins, so a
+ * tenant can swap implementations without forking the package.
  */
-let cachedGeo: { lat: number; lng: number; capturedAt: number } | null = null;
+function mergeClientTools(enabledNames: string[]): Tool<any, any>[] {
+  const builtIns = resolveBuiltinClientTools(enabledNames);
+  const host = readGlobalClientTools();
+  if (host.length === 0) return builtIns;
+  const byName = new Map<string, Tool<any, any>>();
+  for (const t of builtIns) byName.set(t.name, t);
+  for (const t of host) byName.set(t.name, t);
+  return [...byName.values()];
+}
 
-function builtinClientTools(): Tool<any, any>[] {
-  return [
-    defineTool({
-      name: 'getUserLocation',
-      description:
-        "Get the current user's approximate geographic location (latitude/longitude) " +
-        'via the browser. Use this whenever the user asks for "nearby" results or ' +
-        'mentions their current location without naming a city. Triggers a one-time ' +
-        'browser permission prompt; if denied or unavailable, returns an error and ' +
-        'you should ASK the user to type a city instead. Do NOT call repeatedly.',
-      input: z.object({}).strict(),
-      run: async () => {
-        if (cachedGeo && Date.now() - cachedGeo.capturedAt < 30 * 60_000) {
-          return { lat: cachedGeo.lat, lng: cachedGeo.lng, source: 'cache' as const };
-        }
-        if (typeof navigator === 'undefined' || !navigator.geolocation) {
-          throw new Error('geolocation unavailable in this browser');
-        }
-        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: false,
-            timeout: 10_000,
-            maximumAge: 5 * 60_000,
-          });
-        }).catch((e: GeolocationPositionError | Error) => {
-          const msg =
-            'code' in e
-              ? e.code === 1
-                ? 'permission denied'
-                : e.code === 2
-                  ? 'position unavailable'
-                  : e.code === 3
-                    ? 'timeout'
-                    : 'unknown geolocation error'
-              : e.message;
-          throw new Error(msg);
-        });
-        cachedGeo = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          capturedAt: Date.now(),
-        };
-        return { lat: cachedGeo.lat, lng: cachedGeo.lng, source: 'browser' as const };
-      },
-    }),
-  ];
+/**
+ * Read tenant-provided client tools from a global. Same pattern as
+ * `window.aivoyCards`. Each tool is a vanilla JSON-Schema tool (no zod):
+ *
+ *   window.aivoyClientTools = [{
+ *     name: 'getUserLocation',
+ *     description: '...',
+ *     parameters: { type: 'object', properties: {} },
+ *     run: async () => ({ lat, lng }),
+ *   }];
+ *
+ * Used as an ESCAPE HATCH only — the canonical path is the cloud's
+ * `enabledClientTools` config + built-in registry. Custom tools that
+ * aren't built in (or one-off overrides) live here.
+ */
+function readGlobalClientTools(): Tool<any, any>[] {
+  if (typeof window === 'undefined') return [];
+  const raw = (window as unknown as { aivoyClientTools?: unknown }).aivoyClientTools;
+  if (!Array.isArray(raw)) return [];
+  const out: Tool<any, any>[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const t = entry as {
+      name?: unknown;
+      description?: unknown;
+      parameters?: unknown;
+      run?: unknown;
+      renderAs?: unknown;
+    };
+    if (typeof t.name !== 'string' || typeof t.run !== 'function') continue;
+    out.push({
+      name: t.name,
+      description: typeof t.description === 'string' ? t.description : '',
+      parameters:
+        t.parameters && typeof t.parameters === 'object'
+          ? (t.parameters as Record<string, unknown>)
+          : { type: 'object', properties: {} },
+      run: t.run as Tool['run'],
+      ...(typeof t.renderAs === 'string' ? { renderAs: t.renderAs } : {}),
+    });
+  }
+  return out;
 }
 
 function injectStyles() {

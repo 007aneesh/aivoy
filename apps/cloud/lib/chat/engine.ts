@@ -430,15 +430,23 @@ export async function* runTurn(
 
     // Append tool-result messages for EVERY tool_call id (including
     // duplicates AND cache hits) so the LLM sees all of its calls resolved.
+    //
+    // For tools rendered as cards, the user already SEES the full payload —
+    // feeding it all back to the LLM just to narrate burns input tokens
+    // (and on free-tier Groq, blows the per-minute TPM bucket). Replace
+    // with a tiny stub: count + ids/titles. The model still has enough
+    // context to write "Here are 3 stays under ₹5k" without re-ingesting
+    // every field.
     providerHistory = [
       ...providerHistory,
       ...groups.flatMap((g) => {
         const entry = g.cached!;
+        const trimmed = entry.ok && entry.renderAs ? summarizeForLLM(entry.result) : entry.result;
         return g.calls.map<ProviderMessage>((call) => ({
           role: 'tool',
           toolCallId: call.id,
           toolName: call.name,
-          toolResult: entry.result,
+          toolResult: trimmed,
           toolIsError: !entry.ok,
         }));
       }),
@@ -495,25 +503,46 @@ function stableStringify(value: unknown): string {
   });
 }
 
+/**
+ * Reduce a card-rendered tool result to the smallest payload the model needs
+ * to narrate it. The user already sees the visual cards — the LLM only needs
+ * count + identifiers to say "Here are X stays". Cuts narration-loop input
+ * cost by ~80% on listing-card responses.
+ */
+function summarizeForLLM(result: unknown): unknown {
+  if (Array.isArray(result)) {
+    return {
+      count: result.length,
+      items: result.slice(0, 12).map((item) => {
+        if (item && typeof item === 'object') {
+          const r = item as Record<string, unknown>;
+          const out: Record<string, unknown> = {};
+          if (r.id != null) out.id = r.id;
+          if (typeof r.title === 'string') out.title = r.title;
+          if (typeof r.subtitle === 'string') out.subtitle = r.subtitle;
+          if (r.price && typeof r.price === 'object') {
+            const p = r.price as Record<string, unknown>;
+            out.price = { amount: p.amount, currency: p.currency };
+          }
+          return out;
+        }
+        return item;
+      }),
+    };
+  }
+  return result;
+}
+
 function buildSystemPrompt(assistant: Assistant | null): string {
   const lines: string[] = [];
   const name = assistant?.name ?? 'Ask Aivoy';
+  // Minimal core prompt — domain-specific guidance (location, price, etc.)
+  // belongs in the tenant's `assistant.systemPrompt` field, NOT here. Every
+  // word here costs tokens on every turn for every tenant.
   lines.push(
-    `You are ${name}, an AI concierge embedded inside a web application. ` +
-      'Be concise, helpful, and grounded. When you need real data, call a tool — do not fabricate. ' +
-      'Prefer rendering structured results via tools (which the UI turns into rich cards) over long prose. ' +
-      // Tool-call hygiene — Llama 3.3 sometimes leaks pseudo-XML like `<function=…/>` into the text channel.
-      // Be explicit so the model uses the structured tool_calls field instead.
-      'CRITICAL: To call a tool, use the structured tool-calling mechanism. NEVER write tool calls as text — ' +
-      'no `<function=name args=...>`, no `[tool: name(...)]`, no JSON-shaped tool descriptions. Only use the ' +
-      'actual tool you have access to by its exact registered name; do not invent tool names. ' +
-      'If a request depends on a location (city, country, neighborhood, or coordinates) and the user has not provided one, ' +
-      'ASK them where they want to look OR call the getUserLocation client tool if available — never invent or assume a location. ' +
-      'A getUserLocation tool result containing { lat, lng } IS a valid location: pass those coordinates as args to subsequent search tools. ' +
-      'Do not narrate a location in your reply unless the user supplied it or a tool returned it. ' +
-      'When the user states constraints (price, guests, amenities, dates), ALWAYS pass them as the corresponding ' +
-      'tool arguments — never filter results yourself in prose. The cards rendered to the user come directly from ' +
-      'the tool result, so under-specifying the tool call shows results that contradict your written reply.',
+    `You are ${name}. Be concise. Use tools for real data; don't fabricate. ` +
+      'Use the structured tool_calls field — never emit tool calls as text. ' +
+      'Use only the exact tool names you have access to.',
   );
   if (assistant?.systemPrompt) {
     lines.push('\n--- Additional instructions ---');

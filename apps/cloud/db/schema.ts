@@ -91,6 +91,10 @@ export const assistants = pgTable(
     avatarUrl: text('avatar_url'),
     greeting: text('greeting'),
     suggestedPrompts: jsonb('suggested_prompts').$type<string[]>().default([]),
+    /** Names of widget-built-in browser capabilities (e.g. 'getUserLocation')
+     *  the assistant should expose to the LLM. Tenants opt in per-feature
+     *  rather than carrying every capability for every tenant. */
+    enabledClientTools: jsonb('enabled_client_tools').$type<string[]>().notNull().default([]),
     systemPrompt: text('system_prompt'),
     /** { accent, radius, position, mode } — all optional. */
     theme: jsonb('theme').$type<Record<string, unknown>>().default({}),
