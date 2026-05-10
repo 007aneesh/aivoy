@@ -45,12 +45,23 @@ export interface ToolCallRecord {
   status: 'running' | 'done' | 'error';
 }
 
-/** Tool definition. The single source of truth for both the LLM tool spec and runtime executor. */
+/** Tool definition. The single source of truth for both the LLM tool spec and runtime executor.
+ *
+ * Two shapes are supported:
+ *  1. zod-schema flavour — `input` is a zod schema. The package converts it
+ *     to JSON Schema for the LLM and uses zod for runtime arg validation.
+ *  2. vanilla flavour — `parameters` is a pre-built JSON Schema object.
+ *     Used by host pages that inject tools via `window.aivoyClientTools`
+ *     without bringing in zod. Runtime validation is skipped.
+ *
+ * Exactly one of `input` / `parameters` must be set.
+ */
 export interface Tool<TInput extends ZodTypeAny = ZodTypeAny, TOutput = unknown> {
   name: string;
   description: string;
-  input: TInput;
-  run: (args: z.infer<TInput>, ctx: ToolRunContext) => Promise<TOutput> | TOutput;
+  input?: TInput;
+  parameters?: Record<string, unknown>;
+  run: (args: z.infer<TInput> | Record<string, unknown>, ctx: ToolRunContext) => Promise<TOutput> | TOutput;
   /** If set, a successful result is rendered as a card of this type instead of being summarized as text. */
   renderAs?: string;
 }

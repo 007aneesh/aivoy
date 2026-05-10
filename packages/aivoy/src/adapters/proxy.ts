@@ -92,7 +92,8 @@ export function proxyAdapter(opts: ProxyAdapterOptions): ChatAdapter {
       const clientTools = req.tools.map((t) => ({
         name: t.name,
         description: t.description,
-        parameters: zodToJsonSchema(t.input),
+        // Vanilla tools ship pre-built JSON Schema; zod-tools convert on demand.
+        parameters: t.parameters ?? (t.input ? zodToJsonSchema(t.input) : { type: 'object', properties: {} }),
       }));
 
       const headers =

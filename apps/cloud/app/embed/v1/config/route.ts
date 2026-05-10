@@ -53,6 +53,9 @@ export async function GET(req: NextRequest) {
         greeting: assistant?.greeting ?? null,
         suggestedPrompts: assistant?.suggestedPrompts ?? [],
         theme: assistant?.theme ?? {},
+        // Browser-capability tools the widget should auto-mount for this
+        // tenant. Names match `standalone-tools.ts` BUILTINS keys.
+        enabledClientTools: assistant?.enabledClientTools ?? [],
       },
     },
     { headers: corsHeaders(origin) },

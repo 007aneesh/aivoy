@@ -30,13 +30,20 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
     if (!tool) return { ok: false, error: `Unknown tool: ${name}` };
 
-    const parsed = tool.input.safeParse(args ?? {});
-    if (!parsed.success) {
-      return { ok: false, error: `Invalid args for ${name}: ${parsed.error.message}` };
+    let runArgs: unknown = args ?? {};
+    if (tool.input) {
+      // zod-schema tool — validate at runtime.
+      const parsed = tool.input.safeParse(args ?? {});
+      if (!parsed.success) {
+        return { ok: false, error: `Invalid args for ${name}: ${parsed.error.message}` };
+      }
+      runArgs = parsed.data;
     }
+    // Vanilla tools (parameters: JSON Schema) skip runtime validation —
+    // the LLM is constrained by the schema we sent it; trust-but-verify.
 
     try {
-      const result = await tool.run(parsed.data, ctx);
+      const result = await tool.run(runArgs as never, ctx);
       return { ok: true, result, renderAs: tool.renderAs };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

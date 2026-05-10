@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { openSecret } from '@/lib/crypto';
 import type { ChatContext, ServerTool } from './types';
@@ -85,6 +85,7 @@ export async function loadChatContext(
       .select({ id: schema.providerCredentials.id })
       .from(schema.providerCredentials)
       .where(eq(schema.providerCredentials.tenantId, tenant.id))
+      .orderBy(desc(schema.providerCredentials.createdAt))
       .limit(1);
     credentialId = first?.id ?? null;
   }

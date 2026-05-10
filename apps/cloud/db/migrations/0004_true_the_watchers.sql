@@ -1,0 +1,1 @@
+ALTER TABLE "assistants" ADD COLUMN "enabled_client_tools" jsonb DEFAULT '[]'::jsonb NOT NULL;
