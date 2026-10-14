@@ -55,7 +55,7 @@ Sign in → paste an LLM key → register a tool (start from a template) → gen
                                               │  loader.js
                                               ▼
                           ┌─────────────────────────────────┐
-                          │   aivoy.cloud (Next.js + Hono)  │
+                          │   aivoy.cloud (Next.js 15)      │
                           │   /embed/standalone.js          │  ← React+ReactDOM bundled
                           │   /embed/v1/config              │  ← per-tenant assistant config
                           │   /embed/v1/chat                │  ← NDJSON streaming
@@ -76,7 +76,7 @@ Per-request flow: visitor types → widget streams to `/embed/v1/chat` → aivoy
 
 **Multi-LLM gateway behind one streaming interface.** Five providers (OpenAI, Anthropic, Gemini, Grok, Groq) implement a single `streamProvider()` contract returning `AsyncIterable<ProviderChunk>`. Tenants swap models without touching customer code; adding a sixth provider is ~80 lines.
 
-**End-to-end credential isolation.** Provider keys are sealed with AES-256-GCM under a tenant-scoped envelope key on insert. They're decrypted only on the chat hot path, in memory, for the duration of one request. Never logged, never echoed by the API, never accessible to other tenants.
+**End-to-end credential isolation.** Provider keys are encrypted at rest with AES-256-GCM on insert. They're decrypted only on the chat hot path, in memory, for the duration of one request. Never logged, never echoed by the API, never accessible to other tenants.
 
 **Webhook tool router.** Turns the customer's existing REST API into LLM tools without them building anything new. Each call is HMAC-SHA256 signed (Stripe-style: `t={ts},v1={hex}`) with a 5-minute replay window and constant-time verification on the receiving side. The LLM's args are validated against the tool's JSON Schema before the webhook ever fires.
 
@@ -90,9 +90,7 @@ Per-request flow: visitor types → widget streams to `/embed/v1/chat` → aivoy
 
 **Multi-tenant from day one.** First-visit auto-creates a personal tenant keyed on `personal_<userId>`; Clerk organization IDs back team tenants. An atomic upsert handles the layout-and-page race on initial load. Every API call is scoped by tenant at the database boundary.
 
-**Custom serverless entrypoint.** A purpose-built Vercel adapter ([`apps/cloud/src/vercel-entry.ts`](./apps/cloud/src/vercel-entry.ts)) materializes the request body up-front and hands Hono a clean Web Request. Predictable behavior across runtimes, identical input/output to the framework default.
-
-**Edge delivery via Cloudflare.** A small Worker fronts the embed assets and API ([`apps/cloud/cloudflare-worker.js`](./apps/cloud/cloudflare-worker.js)) so customer browsers fetch from a global edge with low TTFB, while the origin terminates on Vercel.
+**Edge delivery via Cloudflare.** A small Worker fronts the embed assets and API ([`apps/cloud/cloudflare-worker.js`](./apps/cloud/cloudflare-worker.js)) so the widget and API are served from a custom domain on Cloudflare, while the origin runs on Vercel.
 
 **Mobile-first embed UI.** Drawer pattern with backdrop, body-scroll lock, ESC-to-close, link-tap auto-close. Same component reused across the dashboard and docs nav.
 
@@ -104,8 +102,8 @@ Per-request flow: visitor types → widget streams to `/embed/v1/chat` → aivoy
 | Auth + multi-tenancy | Clerk (orgs + personal) | Skip the auth side-quest; orgs map cleanly to tenants |
 | Database | Postgres on Neon | Branchable for preview deploys, cheap idle |
 | ORM | Drizzle | Fast, typed, migration history that's actually readable |
-| API edge | Hono | Smaller than Express, better Web-Fetch ergonomics |
-| LLM SDKs | OpenAI / Anthropic / Google / xAI native + Groq via OpenAI-compat | One streaming abstraction, native call shapes |
+| API | Next.js route handlers (Node runtime) | Same deploy as the dashboard; NDJSON streaming via Web `ReadableStream` |
+| LLM providers | Hand-written streaming adapters over raw `fetch` (OpenAI-compatible, Anthropic, Gemini); Grok via the OpenAI-compatible adapter | No vendor SDKs; one provider-agnostic streaming contract |
 | Crypto | Node `webcrypto` AES-256-GCM | No deps, compliant primitive |
 | Widget | React 18 + tsup IIFE bundle | One file, ~230 KB pre-gzip, ships React+ReactDOM with the widget so the host site doesn't need React |
 | Embed delivery | Cloudflare Worker proxy → Vercel | Worker dodges `*.vercel.app` WAF; Vercel hosts the cloud |
